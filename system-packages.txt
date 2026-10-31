@@ -1,0 +1,8 @@
+Required system tools:
+- ffmpeg
+- tesseract-ocr
+- poppler-utils
+- ghostscript
+
+Optional, for Bengali OCR:
+- tesseract-ocr-ben

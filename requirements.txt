@@ -1,0 +1,15 @@
+python-telegram-bot[job-queue]>=21,<23
+Pillow>=10
+pytesseract>=0.3.10
+pypdf>=4
+pikepdf>=8
+pdf2image>=1.17
+qrcode[pil]>=7.4
+opencv-python-headless>=4.8
+pydub>=0.25
+mutagen>=1.47
+yt-dlp>=2024.1
+groq>=0.9
+openai>=1.30
+python-dotenv>=1.0
+filetype>=1.2
