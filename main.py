@@ -763,7 +763,13 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
         return
-    if not query.from_user or query.from_user.id not in ALLOWED_USERS:
+    if (
+        not query.from_user
+        or (
+            query.from_user.id != OWNER_USER_ID
+            and query.from_user.id not in ALLOWED_USERS
+        )
+    ):
         await query.answer("Not authorized", show_alert=True)
         return
     await query.answer()
