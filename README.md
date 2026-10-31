@@ -29,7 +29,14 @@ On BotKeep, install the system tools using its supported system-package mechanis
 
 ## Included in this prototype
 
-The bot presents file-matched inline actions for images, PDFs, audio/video, ZIPs, and text/data files. It includes image resizing/compression/conversion/rotation/center-crop/OCR and image-to-PDF; PDF text extraction, rotation, compression, page splitting, first-ten-page image export, and multi-file merging; audio/video conversion, audio extraction, compression, trimming, Groq Whisper transcription with SRT/VTT sidecars; ZIP creation and safe extraction; QR creation/reading; file info/SHA-256; text cleanup/counting/URL encoding and decoding/JSON formatting/CSV-to-JSON conversion; unit and time conversion; AI summarize/polish/analyze/translate; and YouTube metadata plus accessible captions only. Video downloads are disabled.
+The bot presents file-matched inline actions for images, PDFs, audio/video, ZIPs, and text/data files. It includes:
+- **Images**: resizing/compression/conversion (JPG/PNG/WebP), rotation, center-crop, OCR, image-to-PDF, background removal (`rembg`), Telegram sticker generation (512×512 WebP), and custom text watermark.
+- **PDFs**: text extraction, rotation, compression, page splitting, first-ten-page image export, multi-file merging (`/mergepdf`), password protection (`/protect`), and password removal (`/unlock`).
+- **Audio & Video**: conversion to MP3, audio extraction, video/audio compression, trimming (`/trim`), speed-up adjustment (`/speed`), animated GIF creation, and Groq Whisper transcription with SRT/VTT sidecars.
+- **Voice & AI**: Voice-to-AI automatic transcription and direct AI replies (toggle with `/voiceai`), Text-to-Speech (`/tts`) with automatic language detection and interactive voice selection buttons (Female/Male, Bengali, English, Hindi, Arabic, Urdu), AI summarize/polish/analyze/translate.
+- **Text & Data**: cleanup/counting, URL encoding/decoding, JSON formatting, CSV/TSV-to-JSON conversion.
+- **Everyday Utilities**: scheduled reminders (`/remind`), live currency converter (`/fx`), webpage article extractor (`/read`), unit and time conversion (`/convert`), QR creation/reading, file info/SHA-256, and ZIP creation/safe extraction.
+- **YouTube**: metadata plus accessible captions only (with `cookies.txt` support). Video downloads are disabled.
 
 ## Required settings
 
