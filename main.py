@@ -570,8 +570,7 @@ def process_pdf(src: Path, action: str, outdir: Path) -> tuple[Optional[Path], O
                 buf = io.BytesIO()
                 writer.write(buf)
                 zf.writestr(f"page_{index:03}.pdf", buf.getvalue())
-        return
-         archive, None
+        return archive, None
     if action == "compress":
         if pikepdf is None:
             raise RuntimeError("Install pikepdf to compress PDF files.")
