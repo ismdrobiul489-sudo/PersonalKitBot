@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+allowlist.json
+allowlist.json.tmp
+cookies.txt
+*cookies*.txt

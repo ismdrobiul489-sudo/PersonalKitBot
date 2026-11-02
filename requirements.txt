@@ -15,5 +15,4 @@ python-dotenv>=1.0
 filetype>=1.2
 # New features
 edge-tts>=6.1
-rembg[cpu]>=2.0
 trafilatura>=1.6

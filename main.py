@@ -40,16 +40,23 @@ from telegram.ext import (
     filters,
 )
 from dotenv import load_dotenv
+from tempmail import cmd_tempmail, handle_tempmail_callback
+from privacy import (
+    customize_image_metadata,
+    customize_media_metadata,
+    format_metadata_report,
+    inspect_image_exif,
+    inspect_media_metadata,
+    make_customise_menu,
+    make_metadata_menu,
+    strip_image_metadata,
+    strip_media_metadata,
+)
 
 try:
     import pikepdf
 except ImportError:  # PDF compression is optional if pikepdf is unavailable.
     pikepdf = None
-
-try:
-    import rembg
-except ImportError:  # Background removal is optional if rembg is unavailable.
-    rembg = None
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -181,37 +188,38 @@ async def owner_only(update: Update) -> bool:
 
 def action_buttons(path: Path) -> list[tuple[str, str]]:
     mime, ext = detect_type(path)
-    buttons: list[tuple[str, str]] = [("File info", "do:file:info"), ("SHA-256", "do:file:hash")]
+    buttons: list[tuple[str, str]] = [("ℹ️ File Info", "do:file:info"), ("🔐 SHA-256", "do:file:hash")]
     if mime.startswith("image/") or ext in {"jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"}:
         buttons += [
-            ("Resize", "do:img:resize"), ("Compress", "do:img:compress"), ("Center crop", "do:img:crop"),
-            ("Rotate 90°", "do:img:rotate"), ("OCR text", "do:img:ocr"),
-            ("Image → PDF", "do:img:pdf"), ("Convert to JPG", "do:img:jpg"),
-            ("Convert to PNG", "do:img:png"), ("Convert to WebP", "do:img:webp"),
-            ("Read QR", "do:qr:read"),
-            ("Remove BG", "do:img:rembg"), ("Make Sticker", "do:img:sticker"),
-            ("Watermark", "do:img:watermark"),
+            ("📐 Resize", "do:img:resize"), ("🗜️ Compress", "do:img:compress"), ("✂️ Crop", "do:img:crop"),
+            ("🔄 Rotate", "do:img:rotate"), ("🔍 OCR Text", "do:img:ocr"),
+            ("📄 → PDF", "do:img:pdf"), ("🖼️ → JPG", "do:img:jpg"),
+            ("🖼️ → PNG", "do:img:png"), ("🖼️ → WebP", "do:img:webp"),
+            ("📷 Read QR", "do:qr:read"),
+            ("🎭 Sticker", "do:img:sticker"),
+            ("💧 Watermark", "do:img:watermark"),
+            ("🛡️ Metadata Tools", "do:meta:menu:img"),
         ]
     elif mime == "application/pdf" or ext == "pdf":
         buttons += [
-            ("Extract PDF text", "do:pdf:text"), ("Rotate pages", "do:pdf:rotate"),
-            ("Split pages", "do:pdf:split"), ("Compress PDF", "do:pdf:compress"),
-            ("PDF pages → images", "do:pdf:images"),
+            ("📝 Extract Text", "do:pdf:text"), ("🔄 Rotate Pages", "do:pdf:rotate"),
+            ("✂️ Split Pages", "do:pdf:split"), ("🗜️ Compress", "do:pdf:compress"),
+            ("🖼️ Pages → Images", "do:pdf:images"),
             ("🔒 Password protect", "do:pdf:protect"), ("🔓 Remove password", "do:pdf:unlock"),
         ]
     elif mime.startswith("audio/") or ext in {"mp3", "wav", "m4a", "aac", "ogg", "flac", "opus"}:
-        buttons += [("Convert to MP3", "do:media:mp3"), ("Compress audio", "do:media:compress"), ("Transcribe", "do:media:transcribe"), ("⏩ Speed up", "do:media:speed")]
+        buttons += [("🎵 → MP3", "do:media:mp3"), ("🗜️ Compress", "do:media:compress"), ("🎙️ Transcribe", "do:media:transcribe"), ("✂️ Trim", "do:media:trim"), ("⏩ Speed up", "do:media:speed"), ("🛡️ Metadata Tools", "do:meta:menu:media")]
     elif mime.startswith("video/") or ext in {"mp4", "mov", "mkv", "webm", "avi", "m4v"}:
-        buttons += [("Extract MP3 audio", "do:media:extract"), ("Compress video", "do:media:vcompress"), ("Transcribe audio", "do:media:transcribe"), ("Make GIF", "do:media:gif"), ("⏩ Speed up", "do:media:speed")]
+        buttons += [("🎵 Extract Audio", "do:media:extract"), ("🗜️ Compress", "do:media:vcompress"), ("🎙️ Transcribe", "do:media:transcribe"), ("🎬 Make GIF", "do:media:gif"), ("✂️ Trim", "do:media:trim"), ("⏩ Speed up", "do:media:speed"), ("🛡️ Metadata Tools", "do:meta:menu:media")]
     elif ext == "zip" or mime == "application/zip":
-        buttons += [("Unzip files", "do:zip:unzip")]
+        buttons += [("📂 Unzip", "do:zip:unzip")]
     elif ext == "json":
-        buttons += [("Clean/format text", "do:text:clean"), ("Count text", "do:text:count"), ("Pretty JSON", "do:text:json")]
+        buttons += [("🧹 Clean Text", "do:text:clean"), ("📊 Word Count", "do:text:count"), ("📋 Pretty JSON", "do:text:json")]
     elif ext in {"csv", "tsv"}:
-        buttons += [("Clean/format text", "do:text:clean"), ("Count text", "do:text:count"), ("CSV/TSV → JSON", "do:text:csvjson")]
+        buttons += [("🧹 Clean Text", "do:text:clean"), ("📊 Word Count", "do:text:count"), ("🔄 CSV/TSV → JSON", "do:text:csvjson")]
     elif ext in {"txt", "md", "log"} or mime.startswith("text/"):
-        buttons += [("Clean/format text", "do:text:clean"), ("Count text", "do:text:count"), ("URL encode", "do:text:encode"), ("URL decode", "do:text:decode"), ("Pretty JSON", "do:text:json")]
-    buttons.append(("ZIP this file", "do:zip:zip"))
+        buttons += [("🧹 Clean Text", "do:text:clean"), ("📊 Word Count", "do:text:count"), ("🔤 URL Encode", "do:text:encode"), ("🔓 URL Decode", "do:text:decode"), ("📋 Pretty JSON", "do:text:json")]
+    buttons.append(("📦 ZIP File", "do:zip:zip"))
     return buttons
 
 
@@ -281,6 +289,7 @@ async def on_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/unlock <password> — set unlock password, then send encrypted PDF\n"
         "/speed <factor> — set speed (0.5–4.0), then use ⏩ Speed up button\n"
         "/voiceai — toggle voice-to-AI mode (default: ON)\n"
+        "/tempmail — disposable email to receive OTP/verification codes\n"
         "/help — show this help\n\n"
         "Send a video URL for metadata and available captions only; the bot never downloads the video. "
         "Voice messages are auto-transcribed and answered by AI (toggle with /voiceai). "
@@ -468,13 +477,29 @@ def extract_text(path: Path) -> str:
     raise ValueError("This action supports PDF, TXT, CSV, TSV, Markdown, LOG, or JSON files.")
 
 
-def process_image(src: Path, action: str, outdir: Path) -> tuple[Optional[Path], Optional[str]]:
+def process_image(src: Path, action: str, outdir: Path, **kwargs) -> tuple[Optional[Path], Optional[str]]:
     image = ImageOps.exif_transpose(Image.open(src))
     if action == "ocr":
-        lang = os.getenv("OCR_LANG", "eng")
+        lang = kwargs.get("ocr_lang") or os.getenv("OCR_LANG", "eng")
         return None, pytesseract.image_to_string(image, lang=lang).strip() or "No text detected."
     if action == "resize":
-        image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+        target = kwargs.get("resize_target", "1080p")
+        if target == "1080p":
+            image.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
+        elif target == "720p":
+            image.thumbnail((1280, 720), Image.Resampling.LANCZOS)
+        elif target == "square":
+            side = min(image.size)
+            left = (image.width - side) // 2
+            top = (image.height - side) // 2
+            image = image.crop((left, top, left + side, top + side))
+            image.thumbnail((1080, 1080), Image.Resampling.LANCZOS)
+        elif target == "50pct":
+            image = image.resize((max(1, image.width // 2), max(1, image.height // 2)), Image.Resampling.LANCZOS)
+        elif target == "25pct":
+            image = image.resize((max(1, image.width // 4), max(1, image.height // 4)), Image.Resampling.LANCZOS)
+        else:
+            image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
         out = outdir / f"{src.stem}_resized.png"
         image.save(out, optimize=True)
     elif action == "crop":
@@ -500,12 +525,6 @@ def process_image(src: Path, action: str, outdir: Path) -> tuple[Optional[Path],
             image.convert("RGB").save(out, "JPEG", quality=92, optimize=True)
         else:
             image.save(out, action.upper(), optimize=True)
-    elif action == "rembg":
-        if rembg is None:
-            raise RuntimeError("Install rembg to use background removal: pip install rembg[cpu]")
-        out = outdir / f"{src.stem}_nobg.png"
-        result = rembg.remove(image)
-        result.save(out, "PNG", optimize=True)
     elif action == "sticker":
         # Telegram sticker format: 512×512 transparent WebP
         image = image.convert("RGBA")
@@ -523,7 +542,7 @@ def process_image(src: Path, action: str, outdir: Path) -> tuple[Optional[Path],
         image = image.convert("RGBA")
         txt_layer = Image.new("RGBA", image.size, (255, 255, 255, 0))
         draw = ImageDraw.Draw(txt_layer)
-        watermark_text = os.getenv("WATERMARK_TEXT", "CONFIDENTIAL")
+        watermark_text = kwargs.get("watermark_text") or os.getenv("WATERMARK_TEXT", "CONFIDENTIAL")
         # Use a reasonable font size based on image dimensions
         font_size = max(20, min(image.size) // 12)
         try:
@@ -534,7 +553,7 @@ def process_image(src: Path, action: str, outdir: Path) -> tuple[Optional[Path],
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         x = (image.size[0] - tw) // 2
         y = (image.size[1] - th) // 2
-        draw.text((x, y), watermark_text, fill=(255, 255, 255, 90), font=font)
+        draw.text((x, y), watermark_text, fill=(255, 255, 255, 110), font=font)
         watermarked = Image.alpha_composite(image, txt_layer).convert("RGB")
         out = outdir / f"{src.stem}_watermark.jpg"
         watermarked.save(out, "JPEG", quality=90, optimize=True)
@@ -889,29 +908,26 @@ async def do_transcribe(update: Update, context: ContextTypes.DEFAULT_TYPE, src:
         await update.effective_message.reply_text("Transcribing…")
     async with MAX_HEAVY_JOBS:
         text, segments = await asyncio.to_thread(groq_transcribe, src)
-    outdir = user_dir(update.effective_user.id)
-    transcript_path = outdir / f"{time.time_ns()}_{src.stem}_transcript.txt"
-    transcript_path.write_text(text, encoding="utf-8")
+    # Store transcript data for on-demand format delivery
+    if context.user_data is not None:
+        context.user_data["last_transcript_text"] = text
+        context.user_data["last_transcript_segments"] = segments
+    preview = text[:400] + ("…" if len(text) > 400 else "")
+    format_keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📄 Plain Text", callback_data="do:transcript:txt"),
+            InlineKeyboardButton("📋 SRT (CapCut)", callback_data="do:transcript:srt"),
+        ],
+        [
+            InlineKeyboardButton("🌐 WebVTT", callback_data="do:transcript:vtt"),
+            InlineKeyboardButton("📦 All Formats", callback_data="do:transcript:all"),
+        ],
+    ])
     if update.effective_message:
-        await send_output(update.effective_message, transcript_path, "Transcript (text).")
-    if segments:
-        srt_path = outdir / f"{time.time_ns()}_{src.stem}.srt"
-        vtt_path = outdir / f"{time.time_ns()}_{src.stem}.vtt"
-        srt_lines = []
-        vtt_lines = ["WEBVTT", ""]
-        for index, segment in enumerate(segments, 1):
-            start = float(segment.get("start", 0))
-            end = float(segment.get("end", start + 0.5))
-            if end <= start:
-                end = start + 0.5
-            caption = str(segment.get("text", "")).strip()
-            srt_lines.extend([str(index), f"{subtitle_timestamp(start)} --> {subtitle_timestamp(end)}", caption, ""])
-            vtt_lines.extend([f"{subtitle_timestamp(start, vtt=True)} --> {subtitle_timestamp(end, vtt=True)}", caption, ""])
-        srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
-        vtt_path.write_text("\n".join(vtt_lines), encoding="utf-8")
-        if update.effective_message:
-            await send_output(update.effective_message, srt_path, "SRT subtitles (short chunks).")
-            await send_output(update.effective_message, vtt_path, "WebVTT subtitles (short chunks).")
+        await update.effective_message.reply_text(
+            f"✅ Transcription complete!\n\n📝 Preview:\n{preview}\n\nChoose a format to download:",
+            reply_markup=format_keyboard,
+        )
 
 
 def yt_metadata_and_captions(url: str, outdir: Path) -> tuple[str, Optional[Path]]:
@@ -999,12 +1015,164 @@ def is_youtube_url(url: str) -> bool:
     return parsed.scheme in {"http", "https"} and (host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com"))
 
 
+def process_pdf_with_password(src: Path, action: str, outdir: Path, password: str) -> tuple[Optional[Path], Optional[str]]:
+    """Run PDF protect or unlock using the given password directly (not from env)."""
+    if action == "protect":
+        reader = PdfReader(str(src))
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+        writer.encrypt(password)
+        out = outdir / f"{src.stem}_protected.pdf"
+        with out.open("wb") as f:
+            writer.write(f)
+        return out, f"🔒 PDF protected with password: {password}"
+    if action == "unlock":
+        try:
+            reader = PdfReader(str(src))
+            if reader.is_encrypted:
+                reader.decrypt(password)
+            writer = PdfWriter()
+            for page in reader.pages:
+                writer.add_page(page)
+            out = outdir / f"{src.stem}_unlocked.pdf"
+            with out.open("wb") as f:
+                writer.write(f)
+            return out, None
+        except Exception as exc:
+            raise ValueError(f"Could not unlock PDF. Wrong password or unsupported encryption: {exc}") from exc
+    raise ValueError("Unknown PDF password operation.")
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await authorized(update):
         return
     text = (update.message.text or "").strip()
     if not text:
         return
+
+    # Check if we're awaiting a PDF password from the user
+    user_data = context.user_data or {}
+    awaiting_pdf_action = user_data.get("awaiting_pdf_action")
+    if awaiting_pdf_action:
+        password = text
+        if context.user_data is not None:
+            context.user_data["pdf_password"] = password
+            context.user_data.pop("awaiting_pdf_action", None)
+        src_raw = user_data.get("pdf_pending_file")
+        if src_raw and Path(src_raw).exists():
+            src = Path(src_raw)
+            outdir = user_dir(update.effective_user.id)
+            if context.user_data is not None:
+                context.user_data.pop("pdf_pending_file", None)
+            try:
+                if awaiting_pdf_action == "protect":
+                    out, msg = await asyncio.to_thread(process_pdf_with_password, src, "protect", outdir, password)
+                    await send_output(update.message, out, msg or f"🔒 PDF protected with password: {password}")
+                elif awaiting_pdf_action == "unlock":
+                    out, _ = await asyncio.to_thread(process_pdf_with_password, src, "unlock", outdir, password)
+                    await send_output(update.message, out, "🔓 PDF unlocked successfully.")
+            except Exception as exc:
+                log.exception("PDF password operation failed")
+                await update.message.reply_text(f"Operation failed: {str(exc)[:700]}")
+        else:
+            await update.message.reply_text(f"✅ Password saved. Now send a PDF and tap the appropriate button.")
+        return
+
+    # Check if we're awaiting custom watermark text
+    if user_data.get("awaiting_watermark"):
+        watermark_text = text
+        if context.user_data is not None:
+            context.user_data.pop("awaiting_watermark", None)
+            context.user_data["watermark_text"] = watermark_text
+        src_raw = user_data.get("watermark_pending_file") or user_data.get("last_file")
+        if src_raw and Path(src_raw).exists():
+            src = Path(src_raw)
+            outdir = user_dir(update.effective_user.id)
+            if context.user_data is not None:
+                context.user_data.pop("watermark_pending_file", None)
+            try:
+                out, _ = await asyncio.to_thread(process_image, src, "watermark", outdir, watermark_text=watermark_text)
+                await send_output(update.message, out, f"💧 Watermark applied: '{watermark_text}'")
+            except Exception as exc:
+                log.exception("Watermark operation failed")
+                await update.message.reply_text(f"Watermark failed: {str(exc)[:600]}")
+        else:
+            await update.message.reply_text(f"✅ Watermark text saved as '{watermark_text}'. Now send an image and tap 💧 Watermark.")
+        return
+
+    # Check if we're awaiting trim timestamps (e.g. 00:05 00:20 or 5 25)
+    if user_data.get("awaiting_trim"):
+        trim_range = text.split()
+        if context.user_data is not None:
+            context.user_data.pop("awaiting_trim", None)
+        if len(trim_range) != 2:
+            await update.message.reply_text("Invalid trim range. Format: `00:05 00:20` or seconds `5 20`.")
+            return
+        start_ts, end_ts = trim_range[0], trim_range[1]
+        src_raw = user_data.get("trim_pending_file") or user_data.get("last_file")
+        if src_raw and Path(src_raw).exists():
+            src = Path(src_raw)
+            outdir = user_dir(update.effective_user.id)
+            if context.user_data is not None:
+                context.user_data.pop("trim_pending_file", None)
+            out = outdir / f"{src.stem}_trimmed{src.suffix or '.mp4'}"
+            try:
+                await update.message.reply_text(f"✂️ Trimming from {start_ts} to {end_ts}…")
+                async with MAX_HEAVY_JOBS:
+                    await asyncio.to_thread(ffmpeg_run, ["-ss", start_ts, "-to", end_ts, "-i", str(src), "-c", "copy", str(out)])
+                await send_output(update.message, out, f"✂️ Trimmed ({start_ts} → {end_ts}).")
+            except Exception as exc:
+                log.exception("Trim failed")
+                await update.message.reply_text(f"Trim failed: {str(exc)[:700]}")
+        else:
+            await update.message.reply_text("Please upload an audio or video file first.")
+        return
+
+    # Check if we're awaiting custom metadata author
+    if user_data.get("awaiting_meta_author"):
+        author_text = text
+        if context.user_data is not None:
+            context.user_data.pop("awaiting_meta_author", None)
+        src_raw = user_data.get("meta_pending_file") or user_data.get("last_file")
+        if src_raw and Path(src_raw).exists():
+            src = Path(src_raw)
+            outdir = user_dir(update.effective_user.id)
+            if context.user_data is not None:
+                context.user_data.pop("meta_pending_file", None)
+            try:
+                out = await asyncio.to_thread(customize_image_metadata, src, outdir, author=author_text)
+                await send_output(update.message, out, f"✏️ Custom metadata applied! Author: `{author_text}`")
+            except Exception as exc:
+                log.exception("Custom metadata failed")
+                await update.message.reply_text(f"❌ Failed: {str(exc)[:600]}")
+        else:
+            await update.message.reply_text("Please upload an image first.")
+        return
+
+    # Check if we're awaiting custom media metadata
+    if user_data.get("awaiting_meta_media"):
+        parts_media = text.split("-", 1)
+        title = parts_media[0].strip()
+        artist = parts_media[1].strip() if len(parts_media) > 1 else "Creator"
+        if context.user_data is not None:
+            context.user_data.pop("awaiting_meta_media", None)
+        src_raw = user_data.get("meta_pending_file") or user_data.get("last_file")
+        if src_raw and Path(src_raw).exists():
+            src = Path(src_raw)
+            outdir = user_dir(update.effective_user.id)
+            if context.user_data is not None:
+                context.user_data.pop("meta_pending_file", None)
+            try:
+                out = await asyncio.to_thread(customize_media_metadata, src, outdir, title, artist)
+                await send_output(update.message, out, f"✏️ Custom media metadata applied! Title: `{title}`, Artist: `{artist}`")
+            except Exception as exc:
+                log.exception("Custom media metadata failed")
+                await update.message.reply_text(f"❌ Failed: {str(exc)[:600]}")
+        else:
+            await update.message.reply_text("Please upload a media file first.")
+        return
+
     context.user_data["last_text"] = text
     url_match = re.search(r"https?://\S+", text)
     if url_match and is_youtube_url(url_match.group(0).rstrip(".,)")):
@@ -1024,10 +1192,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Text received. Choose an operation:",
         reply_markup=make_keyboard([
-            ("Count", "do:text:count"), ("Clean whitespace", "do:text:clean"),
-            ("URL encode", "do:text:encode"), ("URL decode", "do:text:decode"),
-            ("AI summarize", "do:ai:summarize"), ("AI polish", "do:ai:polish"),
-            ("AI analyze", "do:ai:analyze"), ("Translate to Bengali", "do:ai:translate"),
+            ("📊 Word Count", "do:text:count"), ("🧹 Clean Whitespace", "do:text:clean"),
+            ("🔤 URL Encode", "do:text:encode"), ("🔓 URL Decode", "do:text:decode"),
+            ("📝 AI Summarize", "do:ai:summarize"), ("✨ AI Polish", "do:ai:polish"),
+            ("🔍 AI Analyze", "do:ai:analyze"), ("🌐 AI Translate", "do:ai:translate:select"),
             ("🔊 Text-to-Speech", "do:tts:select"),
         ]),
     )
@@ -1054,7 +1222,7 @@ async def do_text_action(update: Update, context: ContextTypes.DEFAULT_TYPE, act
         result = json.dumps(records, ensure_ascii=False, indent=2)
     elif action == "ai":
         task = context.user_data.get("ai_task", "summarize")
-        target = os.getenv("AI_TARGET_LANGUAGE", "Bengali")
+        target = context.user_data.get("translate_target_lang") or os.getenv("AI_TARGET_LANGUAGE", "Bengali")
         prompts = {
             "summarize": "Summarize the following text clearly:\n\n" + text,
             "polish": "Polish the following text while preserving its meaning and language:\n\n" + text,
@@ -1078,76 +1246,254 @@ VOICE_CATALOG = {
         "name": "বাংলা (Bengali)",
         "flag": "🇧🇩",
         "voices": [
-            ("🇧🇩 নবানিতা (মহিলা)", "bn-BD-NabanitaNeural"),
-            ("🇧🇩 প্রদীপ (পুরুষ)", "bn-BD-PradeepNeural"),
-            ("🇮🇳 তানিশা (মহিলা)", "bn-IN-TanishaaNeural"),
-            ("🇮🇳 ভাস্কর (পুরুষ)", "bn-IN-BashkarNeural"),
+            ("🇧🇩 নবানিতা ♀", "bn-BD-NabanitaNeural"),
+            ("🇧🇩 প্রদীপ ♂", "bn-BD-PradeepNeural"),
+            ("🇮🇳 তানিশা ♀", "bn-IN-TanishaaNeural"),
+            ("🇮🇳 ভাস্কর ♂", "bn-IN-BashkarNeural"),
         ],
     },
     "en": {
         "name": "English",
         "flag": "🇺🇸",
         "voices": [
-            ("🇺🇸 Aria (Female)", "en-US-AriaNeural"),
-            ("🇺🇸 Guy (Male)", "en-US-GuyNeural"),
-            ("🇬🇧 Sonia (Female)", "en-GB-SoniaNeural"),
-            ("🇬🇧 Ryan (Male)", "en-GB-RyanNeural"),
+            ("🇺🇸 Aria ♀", "en-US-AriaNeural"),
+            ("🇺🇸 Jenny ♀", "en-US-JennyNeural"),
+            ("🇺🇸 Michelle ♀", "en-US-MichelleNeural"),
+            ("🇺🇸 Guy ♂", "en-US-GuyNeural"),
+            ("🇺🇸 Davis ♂", "en-US-DavisNeural"),
+            ("🇺🇸 Jason ♂", "en-US-JasonNeural"),
+            ("🇬🇧 Sonia ♀", "en-GB-SoniaNeural"),
+            ("🇬🇧 Ryan ♂", "en-GB-RyanNeural"),
+            ("🇦🇺 Natasha ♀", "en-AU-NatashaNeural"),
+            ("🇦🇺 William ♂", "en-AU-WilliamNeural"),
         ],
     },
     "hi": {
         "name": "हिन्दी (Hindi)",
         "flag": "🇮🇳",
         "voices": [
-            ("🇮🇳 Swara (Female)", "hi-IN-SwaraNeural"),
-            ("🇮🇳 Madhur (Male)", "hi-IN-MadhurNeural"),
+            ("🇮🇳 Swara ♀", "hi-IN-SwaraNeural"),
+            ("🇮🇳 Ananya ♀", "hi-IN-AnanyaNeural"),
+            ("🇮🇳 Madhur ♂", "hi-IN-MadhurNeural"),
+            ("🇮🇳 Rohit ♂", "hi-IN-RohitNeural"),
+            ("🇮🇳 Kavya ♀", "hi-IN-KavyaNeural"),
+            ("🇮🇳 Aarav ♂", "hi-IN-AaravNeural"),
         ],
     },
     "ar": {
         "name": "العربية (Arabic)",
         "flag": "🇸🇦",
         "voices": [
-            ("🇸🇦 Zariyah (Female)", "ar-SA-ZariyahNeural"),
-            ("🇸🇦 Hamed (Male)", "ar-SA-HamedNeural"),
+            ("🇸🇦 Zariyah ♀", "ar-SA-ZariyahNeural"),
+            ("🇸🇦 Hamed ♂", "ar-SA-HamedNeural"),
+            ("🇪🇬 Salma ♀", "ar-EG-SalmaNeural"),
+            ("🇪🇬 Shakir ♂", "ar-EG-ShakirNeural"),
+            ("🇦🇪 Fatima ♀", "ar-AE-FatimaNeural"),
+            ("🇦🇪 Hamdan ♂", "ar-AE-HamdanNeural"),
         ],
     },
     "ur": {
         "name": "اردو (Urdu)",
         "flag": "🇵🇰",
         "voices": [
-            ("🇵🇰 Uzma (Female)", "ur-PK-UzmaNeural"),
-            ("🇵🇰 Asad (Male)", "ur-PK-AsadNeural"),
+            ("🇵🇰 Uzma ♀", "ur-PK-UzmaNeural"),
+            ("🇵🇰 Asad ♂", "ur-PK-AsadNeural"),
+        ],
+    },
+    "fr": {
+        "name": "Français (French)",
+        "flag": "🇫🇷",
+        "voices": [
+            ("🇫🇷 Denise ♀", "fr-FR-DeniseNeural"),
+            ("🇫🇷 Eloise ♀", "fr-FR-EloiseNeural"),
+            ("🇫🇷 Henri ♂", "fr-FR-HenriNeural"),
+            ("🇫🇷 Alain ♂", "fr-FR-AlainNeural"),
+        ],
+    },
+    "de": {
+        "name": "Deutsch (German)",
+        "flag": "🇩🇪",
+        "voices": [
+            ("🇩🇪 Katja ♀", "de-DE-KatjaNeural"),
+            ("🇩🇪 Seraphina ♀", "de-DE-SeraphinaNeural"),
+            ("🇩🇪 Conrad ♂", "de-DE-ConradNeural"),
+            ("🇩🇪 Killian ♂", "de-DE-KillianNeural"),
+        ],
+    },
+    "es": {
+        "name": "Español (Spanish)",
+        "flag": "🇪🇸",
+        "voices": [
+            ("🇪🇸 Elvira ♀", "es-ES-ElviraNeural"),
+            ("🇪🇸 Ximena ♀", "es-ES-XimenaNeural"),
+            ("🇪🇸 Alvaro ♂", "es-ES-AlvaroNeural"),
+            ("🇲🇽 Dalia ♀", "es-MX-DaliaNeural"),
+            ("🇲🇽 Jorge ♂", "es-MX-JorgeNeural"),
+        ],
+    },
+    "tr": {
+        "name": "Türkçe (Turkish)",
+        "flag": "🇹🇷",
+        "voices": [
+            ("🇹🇷 Emel ♀", "tr-TR-EmelNeural"),
+            ("🇹🇷 Ahmet ♂", "tr-TR-AhmetNeural"),
+        ],
+    },
+    "ru": {
+        "name": "Русский (Russian)",
+        "flag": "🇷🇺",
+        "voices": [
+            ("🇷🇺 Svetlana ♀", "ru-RU-SvetlanaNeural"),
+            ("🇷🇺 Dariya ♀", "ru-RU-DariyaNeural"),
+            ("🇷🇺 Dmitry ♂", "ru-RU-DmitryNeural"),
+        ],
+    },
+    "zh": {
+        "name": "中文 (Chinese)",
+        "flag": "🇨🇳",
+        "voices": [
+            ("🇨🇳 Xiaoxiao ♀", "zh-CN-XiaoxiaoNeural"),
+            ("🇨🇳 Xiaoyi ♀", "zh-CN-XiaoyiNeural"),
+            ("🇨🇳 Yunjian ♂", "zh-CN-YunjianNeural"),
+            ("🇨🇳 Yunxi ♂", "zh-CN-YunxiNeural"),
+        ],
+    },
+    "ja": {
+        "name": "日本語 (Japanese)",
+        "flag": "🇯🇵",
+        "voices": [
+            ("🇯🇵 Nanami ♀", "ja-JP-NanamiNeural"),
+            ("🇯🇵 Keita ♂", "ja-JP-KeitaNeural"),
+            ("🇯🇵 Aoi ♀", "ja-JP-AoiNeural"),
+            ("🇯🇵 Daichi ♂", "ja-JP-DaichiNeural"),
+        ],
+    },
+    "ko": {
+        "name": "한국어 (Korean)",
+        "flag": "🇰🇷",
+        "voices": [
+            ("🇰🇷 Sun-Hi ♀", "ko-KR-SunHiNeural"),
+            ("🇰🇷 InJoon ♂", "ko-KR-InJoonNeural"),
+            ("🇰🇷 Hyunsu ♂", "ko-KR-HyunsuNeural"),
+        ],
+    },
+    "pt": {
+        "name": "Português (Portuguese)",
+        "flag": "🇧🇷",
+        "voices": [
+            ("🇧🇷 Francisca ♀", "pt-BR-FranciscaNeural"),
+            ("🇧🇷 Thalita ♀", "pt-BR-ThalitaNeural"),
+            ("🇧🇷 Antonio ♂", "pt-BR-AntonioNeural"),
+            ("🇵🇹 Raquel ♀", "pt-PT-RaquelNeural"),
+            ("🇵🇹 Duarte ♂", "pt-PT-DuarteNeural"),
+        ],
+    },
+    "it": {
+        "name": "Italiano (Italian)",
+        "flag": "🇮🇹",
+        "voices": [
+            ("🇮🇹 Elsa ♀", "it-IT-ElsaNeural"),
+            ("🇮🇹 Isabella ♀", "it-IT-IsabellaNeural"),
+            ("🇮🇹 Diego ♂", "it-IT-DiegoNeural"),
         ],
     },
 }
 
 
 def detect_text_language(text: str) -> str:
-    """Detect language based on script frequencies without external dependencies."""
-    counts = {
-        "bn": len(re.findall(r"[\u0980-\u09FF]", text)),
-        "hi": len(re.findall(r"[\u0900-\u097F]", text)),
-        "ar": len(re.findall(r"[\u0600-\u06FF]", text)),
-        "en": len(re.findall(r"[a-zA-Z]", text)),
+    """Detect language from Unicode script ranges. Returns ISO 639-1 code."""
+    if not text or not text.strip():
+        return "en"
+    sample = text[:500]  # Use first 500 chars for speed
+
+    counts: dict[str, int] = {
+        "bn": len(re.findall(r"[\u0980-\u09FF]", sample)),   # Bengali script
+        "hi": len(re.findall(r"[\u0900-\u097F]", sample)),   # Devanagari (Hindi)
+        "ar": len(re.findall(r"[\u0600-\u06FF]", sample)),   # Arabic script
+        "ur": len(re.findall(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF]", sample)),  # Urdu (extends Arabic)
+        "zh": len(re.findall(r"[\u4E00-\u9FFF\u3400-\u4DBF]", sample)),  # CJK (Chinese)
+        "ja": len(re.findall(r"[\u3040-\u30FF]", sample)),   # Hiragana/Katakana (Japanese)
+        "ko": len(re.findall(r"[\uAC00-\uD7AF]", sample)),   # Hangul (Korean)
+        "ru": len(re.findall(r"[\u0400-\u04FF]", sample)),   # Cyrillic (Russian)
+        "tr": 0,   # Turkish uses Latin; detected by keyword heuristic below
+        "fr": 0,   # French uses Latin; detected by keyword heuristic below
+        "de": 0,   # German uses Latin; detected by keyword heuristic below
+        "es": 0,   # Spanish uses Latin; detected by keyword heuristic below
+        "pt": 0,   # Portuguese uses Latin
+        "it": 0,   # Italian uses Latin
+        "en": len(re.findall(r"[a-zA-Z]", sample)),
     }
-    best_lang = max(counts, key=counts.get)
-    if counts[best_lang] > 0:
-        return best_lang
-    return "en"
+
+    # --- Boost Arabic vs Urdu ---
+    # Urdu uses extended Arabic block; if more extended chars → Urdu
+    ar_basic = len(re.findall(r"[\u0600-\u06FF]", sample))
+    ur_ext = len(re.findall(r"[\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]", sample))
+    if ar_basic > 0 and ur_ext > ar_basic * 0.3:
+        counts["ur"] = ar_basic + ur_ext
+        counts["ar"] = max(0, counts["ar"] - ur_ext)
+
+    # --- Boost Hindi vs Bengali (both Brahmic scripts but different blocks) ---
+    # They use different Unicode ranges so the regex already separates them well.
+
+    # --- Latin-script languages: use common unique words/characters as hints ---
+    lower = sample.lower()
+    # French: accented chars é, è, ê, à, ù, ç, î, ô
+    fr_score = len(re.findall(r"[éèêàùçîôœæ]", sample))
+    # German: ä, ö, ü, ß
+    de_score = len(re.findall(r"[äöüß]", sample)) * 3
+    # Spanish: ñ, ¿, ¡
+    es_score = len(re.findall(r"[ñ¿¡]", sample)) * 4
+    # Portuguese: ã, õ, ê, â  (shares some with French)
+    pt_score = len(re.findall(r"[ãõâ]", sample)) * 4
+    # Turkish: ğ, ş, ı, İ
+    tr_score = len(re.findall(r"[ğşıİ]", sample)) * 4
+    # Italian: common words
+    it_score = len(re.findall(r"\b(il|la|di|che|un|per|non|si|con|ho)\b", lower)) * 2
+
+    counts["fr"] = fr_score
+    counts["de"] = de_score
+    counts["es"] = es_score
+    counts["pt"] = pt_score
+    counts["tr"] = tr_score
+    counts["it"] = it_score
+
+    # Non-Latin scripts take absolute priority
+    non_latin = {k: v for k, v in counts.items() if k not in {"en", "fr", "de", "es", "pt", "tr", "it"}}
+    best_non_latin = max(non_latin, key=lambda k: non_latin[k])
+    if non_latin[best_non_latin] >= 5:  # threshold: at least 5 script characters
+        return best_non_latin
+
+    # For Latin-based: pick highest scoring language
+    latin_langs = {k: counts[k] for k in ("en", "fr", "de", "es", "pt", "tr", "it")}
+    best_latin = max(latin_langs, key=lambda k: latin_langs[k])
+    if latin_langs[best_latin] > 0:
+        return best_latin
+
+    return "en"  # safe default
 
 
-def make_tts_keyboard(lang_code: str) -> InlineKeyboardMarkup:
-    """Build voice selection buttons based on detected language."""
-    buttons = []
+def make_tts_keyboard(lang_code: str, text: str = "") -> InlineKeyboardMarkup:
+    """Build voice selection buttons — shows ONLY the detected language's voices first,
+    then offers a quick switch to the most common alternative languages."""
+    buttons: list[tuple[str, str]] = []
+
+    # Primary: voices for detected language
     lang_info = VOICE_CATALOG.get(lang_code, VOICE_CATALOG["en"])
     for label, voice_name in lang_info["voices"]:
         buttons.append((label, f"do:tts:{voice_name}"))
 
-    if lang_code != "en":
-        buttons.append(("🇺🇸 Aria (EN)", "do:tts:en-US-AriaNeural"))
-        buttons.append(("🇺🇸 Guy (EN)", "do:tts:en-US-GuyNeural"))
-    else:
-        buttons.append(("🇧🇩 নবানিতা (BN)", "do:tts:bn-BD-NabanitaNeural"))
-        buttons.append(("🇧🇩 প্রদীপ (BN)", "do:tts:bn-BD-PradeepNeural"))
+    # Secondary row: language switcher buttons (skip detected lang, pick top 3 alternatives)
+    alt_order = ["bn", "en", "hi", "ar", "ur", "fr", "de", "es", "zh", "ja", "ko", "ru", "tr", "pt", "it"]
+    alts_shown = 0
+    for alt in alt_order:
+        if alt == lang_code or alts_shown >= 3:
+            continue
+        info = VOICE_CATALOG.get(alt)
+        if info:
+            # Use flag + short name to save space
+            short = info["name"].split("(")[0].strip()[:10]
+            buttons.append((f"{info['flag']} {short}", f"do:tts:lang:{alt}"))
+            alts_shown += 1
 
     return make_keyboard(buttons, row_size=2)
 
@@ -1169,6 +1515,100 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     data = query.data or ""
     parts = data.split(":")
     user_data = context.user_data or {}
+    # ── Temp Mail callbacks ──────────────────────────────────────────────────────
+    if parts[0] == "do" and parts[1] == "tempmail" and len(parts) >= 3:
+        sub_action = parts[2]
+        extra_id = parts[3] if len(parts) > 3 else None
+        await handle_tempmail_callback(query, context, sub_action, extra_id)
+        return
+
+    # ── Transcript format selector ───────────────────────────────────────────────
+    if parts[0] == "do" and len(parts) == 3 and parts[1] == "transcript":
+        fmt = parts[2]
+        transcript_text = user_data.get("last_transcript_text", "")
+        segments = user_data.get("last_transcript_segments", [])
+        if not transcript_text and not segments:
+            if query.message:
+                await query.message.reply_text("No transcript found. Please transcribe a file first.")
+            return
+        outdir = user_dir(query.from_user.id)
+        stem = f"{time.time_ns()}_transcript"
+        try:
+            if fmt in {"txt", "all"}:
+                txt_path = outdir / f"{stem}.txt"
+                txt_path.write_text(transcript_text, encoding="utf-8")
+                asyncio.create_task(remove_later(txt_path))
+                if query.message:
+                    await query.message.reply_document(document=str(txt_path), caption="📄 Plain Text transcript")
+            if fmt in {"srt", "all"} and segments:
+                srt_lines = []
+                for index, segment in enumerate(segments, 1):
+                    start = float(segment.get("start", 0))
+                    end = float(segment.get("end", start + 0.5))
+                    if end <= start:
+                        end = start + 0.5
+                    caption = str(segment.get("text", "")).strip()
+                    srt_lines.extend([str(index), f"{subtitle_timestamp(start)} --> {subtitle_timestamp(end)}", caption, ""])
+                srt_path = outdir / f"{stem}.srt"
+                srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
+                asyncio.create_task(remove_later(srt_path))
+                if query.message:
+                    await query.message.reply_document(document=str(srt_path), caption="📋 SRT subtitles (CapCut)")
+            if fmt in {"vtt", "all"} and segments:
+                vtt_lines = ["WEBVTT", ""]
+                for segment in segments:
+                    start = float(segment.get("start", 0))
+                    end = float(segment.get("end", start + 0.5))
+                    if end <= start:
+                        end = start + 0.5
+                    caption = str(segment.get("text", "")).strip()
+                    vtt_lines.extend([f"{subtitle_timestamp(start, vtt=True)} --> {subtitle_timestamp(end, vtt=True)}", caption, ""])
+                vtt_path = outdir / f"{stem}.vtt"
+                vtt_path.write_text("\n".join(vtt_lines), encoding="utf-8")
+                asyncio.create_task(remove_later(vtt_path))
+                if query.message:
+                    await query.message.reply_document(document=str(vtt_path), caption="🌐 WebVTT subtitles")
+        except Exception as exc:
+            log.exception("Transcript format delivery failed")
+            if query.message:
+                await query.message.reply_text(f"Failed to send transcript: {str(exc)[:600]}")
+        return
+    # ── Speed factor selector ────────────────────────────────────────────────────
+    if parts[0] == "do" and parts[1] == "speed" and len(parts) == 3:
+        try:
+            factor = float(parts[2])
+        except ValueError:
+            if query.message:
+                await query.message.reply_text("Invalid speed value.")
+            return
+        if context.user_data is not None:
+            context.user_data["speed_factor"] = factor
+        src_raw = user_data.get("last_file")
+        src = Path(src_raw) if src_raw else None
+        if not src or not src.exists():
+            if query.message:
+                await query.message.reply_text("Please upload the file again; temporary files expire after 30 minutes.")
+            return
+        outdir = user_dir(query.from_user.id)
+        atempo = min(max(factor, 0.5), 4.0)
+        out = outdir / f"{src.stem}_speed{atempo}x{src.suffix or '.mp4'}"
+        mime, _ = detect_type(src)
+        if mime.startswith("video/"):
+            setpts = f"{1.0/atempo:.4f}"
+            args = ["-i", str(src), "-filter_complex", f"[0:v]setpts={setpts}*PTS[v];[0:a]atempo={atempo}[a]", "-map", "[v]", "-map", "[a]", "-preset", "veryfast", str(out)]
+        else:
+            args = ["-i", str(src), "-filter:a", f"atempo={atempo}", str(out)]
+        try:
+            if query.message:
+                await query.message.reply_text(f"⏩ Applying {atempo}x speed…")
+            async with MAX_HEAVY_JOBS:
+                await asyncio.to_thread(ffmpeg_run, args)
+            await send_output(query.message, out, f"⏩ Speed adjusted to {atempo}x.")
+        except Exception as exc:
+            log.exception("Speed operation failed")
+            if query.message:
+                await query.message.reply_text(f"Speed operation failed: {str(exc)[:700]}")
+        return
     if parts[0] == "do" and len(parts) >= 3 and parts[1] == "tts":
         action_or_voice = parts[2]
         text = user_data.get("tts_text") or user_data.get("last_text")
@@ -1190,9 +1630,22 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             lang_name = lang_info["name"]
             if query.message:
                 await query.message.reply_text(
-                    f"Detected language: {flag} {lang_name}\n\n"
-                    f"🗣️ Choose a voice for this text:",
-                    reply_markup=make_tts_keyboard(lang_code),
+                    f"🔍 Detected language: {flag} {lang_name}\n\n"
+                    f"🗣️ Choose a voice (bottom row = switch language):",
+                    reply_markup=make_tts_keyboard(lang_code, text),
+                )
+            return
+
+        # ── Language switcher: do:tts:lang:<code> ──────────────────────────────
+        if action_or_voice == "lang" and len(parts) == 4:
+            switch_lang = parts[3]
+            lang_info = VOICE_CATALOG.get(switch_lang, VOICE_CATALOG["en"])
+            flag = lang_info["flag"]
+            lang_name = lang_info["name"]
+            if query.message:
+                await query.message.reply_text(
+                    f"{flag} Switched to {lang_name}. Choose a voice:",
+                    reply_markup=make_tts_keyboard(switch_lang, text),
                 )
             return
 
@@ -1219,6 +1672,362 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if query.message:
                 await query.message.reply_text(f"TTS failed: {str(exc)[:600]}")
         return
+
+    # ── Dynamic AI Translation Language Selector ─────────────────────────────────
+    if parts[0] == "do" and parts[1] == "ai" and len(parts) >= 3 and parts[2] == "translate":
+        if len(parts) == 3 or parts[3] == "select":
+            if query.message:
+                await query.message.reply_text(
+                    "🌐 Select Target Language for AI Translation:",
+                    reply_markup=make_keyboard([
+                        ("🇧🇩 বাংলা (Bengali)", "do:ai:translate:Bengali"),
+                        ("🇺🇸 English", "do:ai:translate:English"),
+                        ("🇸🇦 العربية (Arabic)", "do:ai:translate:Arabic"),
+                        ("🇮🇳 हिन्दी (Hindi)", "do:ai:translate:Hindi"),
+                        ("🇪🇸 Español (Spanish)", "do:ai:translate:Spanish"),
+                        ("🇫🇷 Français (French)", "do:ai:translate:French"),
+                        ("🇩🇪 Deutsch (German)", "do:ai:translate:German"),
+                        ("🇷🇺 Русский (Russian)", "do:ai:translate:Russian"),
+                    ], row_size=2)
+                )
+            return
+        target_lang = parts[3]
+        if context.user_data is not None:
+            context.user_data["translate_target_lang"] = target_lang
+            context.user_data["ai_task"] = "translate"
+        text = user_data.get("last_text")
+        if not text:
+            raw = user_data.get("last_file")
+            if raw and Path(raw).exists():
+                try:
+                    text = await asyncio.to_thread(extract_text, Path(raw))
+                except Exception:
+                    pass
+        if not text:
+            if query.message:
+                await query.message.reply_text("Send text or upload a text file first.")
+            return
+        if query.message:
+            await query.message.reply_text(f"🌐 Translating to {target_lang}…")
+        await do_text_action(update, context, "ai", text)
+        return
+
+    # ── Dynamic Image Resize Target Selector & Handler ───────────────────────────
+    if parts[0] == "do" and parts[1] == "img" and parts[2] == "resize":
+        if len(parts) == 3:
+            if query.message:
+                await query.message.reply_text(
+                    "📐 Select target resolution or ratio:",
+                    reply_markup=make_keyboard([
+                        ("📱 1080p FHD", "do:img:resize:1080p"),
+                        ("🖥️ 720p HD", "do:img:resize:720p"),
+                        ("🔲 1:1 Square (1080×1080)", "do:img:resize:square"),
+                        ("📉 50% Half Size", "do:img:resize:50pct"),
+                        ("📉 25% Quarter Size", "do:img:resize:25pct"),
+                    ], row_size=2)
+                )
+            return
+        if len(parts) == 4:
+            target = parts[3]
+            src_raw = user_data.get("last_file")
+            src = Path(src_raw) if src_raw else None
+            if not src or not src.exists():
+                if query.message:
+                    await query.message.reply_text("Please upload the image again.")
+                return
+            outdir = user_dir(query.from_user.id)
+            if query.message:
+                await query.message.reply_text(f"📐 Resizing image ({target})…")
+            try:
+                out, _ = await asyncio.to_thread(process_image, src, "resize", outdir, resize_target=target)
+                await send_output(query.message, out, f"📐 Resized ({target}).")
+            except Exception as exc:
+                log.exception("Resize failed")
+                if query.message:
+                    await query.message.reply_text(f"Resize failed: {str(exc)[:600]}")
+            return
+
+    # ── Dynamic OCR Language Selector & Handler ──────────────────────────────────
+    if parts[0] == "do" and parts[1] == "img" and parts[2] == "ocr":
+        if query.message:
+            await query.message.reply_text(
+                "🔍 Select OCR Language:",
+                reply_markup=make_keyboard([
+                    ("🇬🇧 English", "do:ocr:eng"),
+                    ("🇧🇩 বাংলা (Bengali)", "do:ocr:ben"),
+                    ("🌐 English + বাংলা", "do:ocr:eng+ben"),
+                    ("🇮🇳 हिन्दी (Hindi)", "do:ocr:hin"),
+                    ("🇸🇦 العربية (Arabic)", "do:ocr:ara"),
+                ], row_size=2)
+            )
+        return
+
+    if parts[0] == "do" and parts[1] == "ocr" and len(parts) == 3:
+        lang = parts[2]
+        src_raw = user_data.get("last_file")
+        src = Path(src_raw) if src_raw else None
+        if not src or not src.exists():
+            if query.message:
+                await query.message.reply_text("Please upload the image again.")
+            return
+        outdir = user_dir(query.from_user.id)
+        if query.message:
+            await query.message.reply_text(f"🔍 Reading text with language `{lang}`…")
+        try:
+            _, result = await asyncio.to_thread(process_image, src, "ocr", outdir, ocr_lang=lang)
+            text_out = (result or "No text detected.").strip()
+            if len(text_out) <= 3900:
+                await query.message.reply_text(f"🔍 Extracted Text ({lang}):\n\n{text_out}")
+            else:
+                txt_file = outdir / f"{src.stem}_ocr_{lang}.txt"
+                txt_file.write_text(text_out, encoding="utf-8")
+                await send_output(query.message, txt_file, f"🔍 Extracted Text ({lang})")
+        except Exception as exc:
+            log.exception("OCR failed")
+            if query.message:
+                await query.message.reply_text(f"OCR failed: {str(exc)[:600]}")
+        return
+
+    # ── Dynamic Image Watermark Options ──────────────────────────────────────────
+    if parts[0] == "do" and parts[1] == "img" and parts[2] == "watermark":
+        src_raw = user_data.get("last_file")
+        src = Path(src_raw) if src_raw else None
+        if not src or not src.exists():
+            if query.message:
+                await query.message.reply_text("Please upload the image again.")
+            return
+        if query.message:
+            await query.message.reply_text(
+                "💧 Watermark Options:\n\n"
+                "• Tap **Default** for 'CONFIDENTIAL'\n"
+                "• Or tap **Custom Text** to type your brand, name, or @channel:",
+                reply_markup=make_keyboard([
+                    ("⚡ Default (CONFIDENTIAL)", "do:wm:default"),
+                    ("✏️ Custom Watermark Text…", "do:wm:ask"),
+                ], row_size=1)
+            )
+        return
+
+    if parts[0] == "do" and parts[1] == "wm" and len(parts) == 3:
+        sub_action = parts[2]
+        src_raw = user_data.get("last_file")
+        src = Path(src_raw) if src_raw else None
+        if not src or not src.exists():
+            if query.message:
+                await query.message.reply_text("Please upload the image again.")
+            return
+        outdir = user_dir(query.from_user.id)
+        if sub_action == "default":
+            try:
+                out, _ = await asyncio.to_thread(process_image, src, "watermark", outdir, watermark_text="CONFIDENTIAL")
+                await send_output(query.message, out, "💧 Watermark applied ('CONFIDENTIAL').")
+            except Exception as exc:
+                log.exception("Watermark failed")
+                if query.message:
+                    await query.message.reply_text(f"Watermark failed: {str(exc)[:600]}")
+        elif sub_action == "ask":
+            if context.user_data is not None:
+                context.user_data["awaiting_watermark"] = True
+                context.user_data["watermark_pending_file"] = str(src)
+            if query.message:
+                await query.message.reply_text("💧 Please send the text you want as watermark:")
+        return
+
+    # ── Dynamic Audio / Video Trim ───────────────────────────────────────────────
+    if parts[0] == "do" and parts[1] == "media" and parts[2] == "trim":
+        src_raw = user_data.get("last_file")
+        src = Path(src_raw) if src_raw else None
+        if not src or not src.exists():
+            if query.message:
+                await query.message.reply_text("Please upload the file again.")
+            return
+        if context.user_data is not None:
+            context.user_data["awaiting_trim"] = True
+            context.user_data["trim_pending_file"] = str(src)
+        if query.message:
+            await query.message.reply_text(
+                "✂️ Send the start and end timestamp to trim:\n\n"
+                "Examples:\n"
+                "• `00:05 00:20`\n"
+                "• `10 45` (in seconds)"
+            )
+        return
+
+    # ── Dynamic Video to GIF Duration Selector ───────────────────────────────────
+    if parts[0] == "do" and parts[1] == "media" and parts[2] == "gif":
+        if query.message:
+            await query.message.reply_text(
+                "🎬 Select GIF Duration:",
+                reply_markup=make_keyboard([
+                    ("⏱️ First 5 sec", "do:gif:5"),
+                    ("⏱️ First 10 sec", "do:gif:10"),
+                    ("⏱️ First 15 sec", "do:gif:15"),
+                ], row_size=3)
+            )
+        return
+
+    if parts[0] == "do" and parts[1] == "gif" and len(parts) == 3:
+        duration_sec = parts[2]
+        src_raw = user_data.get("last_file")
+        src = Path(src_raw) if src_raw else None
+        if not src or not src.exists():
+            if query.message:
+                await query.message.reply_text("Please upload the file again.")
+            return
+        outdir = user_dir(query.from_user.id)
+        out = outdir / f"{src.stem}.gif"
+        args = ["-i", str(src), "-t", duration_sec, "-vf", "fps=12,scale=480:-1:flags=lanczos", "-loop", "0", str(out)]
+        if query.message:
+            await query.message.reply_text(f"🎬 Creating {duration_sec}s animated GIF…")
+        try:
+            async with MAX_HEAVY_JOBS:
+                await asyncio.to_thread(ffmpeg_run, args)
+            await send_output(query.message, out, f"🎬 Animated GIF ({duration_sec}s).")
+        except Exception as exc:
+            log.exception("GIF conversion failed")
+            if query.message:
+                await query.message.reply_text(f"GIF failed: {str(exc)[:600]}")
+        return
+
+    # ── Privacy & Metadata Toolkit (View / Delete / Customise) ───────────────────
+    if parts[0] == "do" and parts[1] == "meta":
+        sub_cmd = parts[2]
+        group = parts[3] if len(parts) > 3 else "img"
+        src_raw = user_data.get("last_file")
+        src = Path(src_raw) if src_raw else None
+
+        if sub_cmd == "menu":
+            if not src or not src.exists():
+                if query.message:
+                    await query.message.reply_text("Please upload the file again.")
+                return
+            if query.message:
+                await query.message.reply_text(
+                    "🛡️ **Privacy & Metadata Toolkit:**\n\n"
+                    "Select an option:\n"
+                    "• **👁️ View Metadata** — Inspect camera, date, software, and GPS location\n"
+                    "• **🗑️ Delete All** — 100% anonymous, instant purge of all metadata\n"
+                    "• **✏️ Customise** — Disguise as DSLR/iPhone, custom author, or reset date",
+                    parse_mode="Markdown",
+                    reply_markup=make_metadata_menu(group),
+                )
+            return
+
+        if sub_cmd == "view":
+            if not src or not src.exists():
+                if query.message:
+                    await query.message.reply_text("Please upload the file again.")
+                return
+            if group == "img":
+                info = await asyncio.to_thread(inspect_image_exif, src)
+                report = format_metadata_report(info, is_media=False)
+            else:
+                info = await asyncio.to_thread(inspect_media_metadata, src)
+                report = format_metadata_report(info, is_media=True)
+            if query.message:
+                await query.message.reply_text(
+                    report,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=False,
+                    reply_markup=make_metadata_menu(group),
+                )
+            return
+
+        if sub_cmd == "delete":
+            if not src or not src.exists():
+                if query.message:
+                    await query.message.reply_text("Please upload the file again.")
+                return
+            outdir = user_dir(query.from_user.id)
+            if group == "img":
+                if query.message:
+                    await query.message.reply_text("🗑️ Purging all image metadata, device info, and GPS coordinates…")
+                try:
+                    out, _ = await asyncio.to_thread(strip_image_metadata, src, outdir)
+                    await send_output(query.message, out, "✅ All EXIF & GPS metadata deleted! 100% anonymous.")
+                except Exception as exc:
+                    log.exception("Image metadata strip failed")
+                    if query.message:
+                        await query.message.reply_text(f"❌ Failed: {str(exc)[:600]}")
+            else:
+                if query.message:
+                    await query.message.reply_text("🗑️ Purging all media metadata and author tags…")
+                try:
+                    out = await asyncio.to_thread(strip_media_metadata, src, outdir)
+                    await send_output(query.message, out, "✅ All media metadata deleted! 100% anonymous.")
+                except Exception as exc:
+                    log.exception("Media metadata strip failed")
+                    if query.message:
+                        await query.message.reply_text(f"❌ Failed: {str(exc)[:600]}")
+            return
+
+        if sub_cmd == "cust_menu":
+            if query.message:
+                await query.message.reply_text(
+                    "✏️ **Customise & Disguise Metadata:**\n\n"
+                    "Choose how you want to disguise or customize this file's metadata:",
+                    parse_mode="Markdown",
+                    reply_markup=make_customise_menu(group),
+                )
+            return
+
+        if sub_cmd == "set":
+            setting = parts[3] if len(parts) > 3 else ""
+            if not src or not src.exists():
+                if query.message:
+                    await query.message.reply_text("Please upload the file again.")
+                return
+            outdir = user_dir(query.from_user.id)
+
+            if setting == "dslr":
+                if query.message:
+                    await query.message.reply_text("🎭 Disguising image as Sony Alpha 7 IV (DSLR)…")
+                try:
+                    out = await asyncio.to_thread(customize_image_metadata, src, outdir, "Sony", "ILCE-7M4", "Pro Photographer")
+                    await send_output(query.message, out, "🎭 Disguised: Camera set to Sony Alpha 7 IV, GPS removed.")
+                except Exception as exc:
+                    if query.message:
+                        await query.message.reply_text(f"❌ Failed: {str(exc)[:600]}")
+                return
+
+            if setting == "iphone":
+                if query.message:
+                    await query.message.reply_text("🎭 Disguising image as Apple iPhone 15 Pro…")
+                try:
+                    out = await asyncio.to_thread(customize_image_metadata, src, outdir, "Apple", "iPhone 15 Pro", "Apple User")
+                    await send_output(query.message, out, "🎭 Disguised: Camera set to iPhone 15 Pro, GPS removed.")
+                except Exception as exc:
+                    if query.message:
+                        await query.message.reply_text(f"❌ Failed: {str(exc)[:600]}")
+                return
+
+            if setting == "today":
+                now_str = datetime.datetime.now().strftime("%Y:%m:%d %H:%M:%S")
+                try:
+                    out = await asyncio.to_thread(customize_image_metadata, src, outdir, date_str=now_str)
+                    await send_output(query.message, out, f"📅 Date/Time reset to current time: `{now_str}`")
+                except Exception as exc:
+                    if query.message:
+                        await query.message.reply_text(f"❌ Failed: {str(exc)[:600]}")
+                return
+
+            if setting == "ask_author":
+                if context.user_data is not None:
+                    context.user_data["awaiting_meta_author"] = True
+                    context.user_data["meta_pending_file"] = str(src)
+                if query.message:
+                    await query.message.reply_text("👤 Please send the Author/Artist name you want embedded in the image:")
+                return
+
+            if setting == "ask_media":
+                if context.user_data is not None:
+                    context.user_data["awaiting_meta_media"] = True
+                    context.user_data["meta_pending_file"] = str(src)
+                if query.message:
+                    await query.message.reply_text("🎬 Send the custom title and artist:\nFormat: `Title - Artist` (e.g. `My Video - Rob`)")
+                return
+        return
+
     if parts[0] == "do" and len(parts) == 3 and parts[1] in {"text", "ai"}:
         group, action = parts[1], parts[2]
         text = user_data.get("last_text")
@@ -1294,18 +2103,45 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         await send_output(query.message, out, "Extracted PDF text.")
                     return
                 if action == "protect":
-                    password = user_data.get("pdf_password", os.getenv("PDF_PASSWORD", "1234"))
-                    os.environ["PDF_PASSWORD"] = password
-                    out, msg = await asyncio.to_thread(process_pdf, src, action, outdir)
+                    password = user_data.get("pdf_password")
+                    if not password:
+                        # No password set — prompt user to send one as a text message
+                        if context.user_data is not None:
+                            context.user_data["awaiting_pdf_action"] = "protect"
+                            context.user_data["pdf_pending_file"] = str(src)
+                        if query.message:
+                            await query.message.reply_text(
+                                "🔒 Please send the password as a text message. "
+                                "Your next text message will be used as the PDF password. "
+                                "Then tap the button again.\n\n"
+                                "Alternatively, use /protect <password> to pre-set a password."
+                            )
+                        return
+                    out, msg = await asyncio.to_thread(process_pdf_with_password, src, "protect", outdir, password)
                     if out:
-                        await send_output(query.message, out, msg or "PDF protected.")
+                        await send_output(query.message, out, msg or f"🔒 PDF protected with password: {password}")
                     else:
                         if query.message:
-                            await query.message.reply_text(msg or "PDF protected.")
+                            await query.message.reply_text(msg or "🔒 PDF protected.")
                     return
                 if action == "unlock":
-                    password = user_data.get("pdf_password", os.getenv("PDF_PASSWORD", "1234"))
-                    os.environ["PDF_PASSWORD"] = password
+                    password = user_data.get("pdf_password")
+                    if not password:
+                        # No password set — prompt user to send one as a text message
+                        if context.user_data is not None:
+                            context.user_data["awaiting_pdf_action"] = "unlock"
+                            context.user_data["pdf_pending_file"] = str(src)
+                        if query.message:
+                            await query.message.reply_text(
+                                "🔓 Please send the password as a text message. "
+                                "Your next text message will be used as the PDF unlock password. "
+                                "Then tap the button again.\n\n"
+                                "Alternatively, use /unlock <password> to pre-set a password."
+                            )
+                        return
+                    out, _ = await asyncio.to_thread(process_pdf_with_password, src, "unlock", outdir, password)
+                    await send_output(query.message, out, "🔓 PDF unlocked successfully.")
+                    return
                 out, _ = await asyncio.to_thread(process_pdf, src, action, outdir)
                 await send_output(query.message, out, "PDF processed.")
                 return
@@ -1313,7 +2149,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 if action == "transcribe":
                     # release semaphore before helper acquires it
                     pass
-                elif action in {"mp3", "compress", "extract", "vcompress", "gif", "speed"}:
+                elif action in {"mp3", "compress", "extract", "vcompress", "gif", "speed", "trim"}:
                     pass
                 else:
                     raise ValueError("Unknown media operation.")
@@ -1325,7 +2161,24 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 out = outdir / f"{src.stem}.gif"
                 args = ["-i", str(src), "-t", "10", "-vf", "fps=12,scale=480:-1:flags=lanczos", "-loop", "0", str(out)]
             elif action == "speed":
-                speed = user_data.get("speed_factor", 1.5)
+                speed_factor = user_data.get("speed_factor")
+                if speed_factor is None:
+                    # No speed set — show speed selector keyboard
+                    speed_keyboard = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("🐢 0.75x", callback_data="do:speed:0.75"),
+                            InlineKeyboardButton("🚶 1.25x", callback_data="do:speed:1.25"),
+                        ],
+                        [
+                            InlineKeyboardButton("🚀 1.5x", callback_data="do:speed:1.5"),
+                            InlineKeyboardButton("⚡ 2.0x", callback_data="do:speed:2.0"),
+                            InlineKeyboardButton("🔥 3.0x", callback_data="do:speed:3.0"),
+                        ],
+                    ])
+                    if query.message:
+                        await query.message.reply_text("⏩ Choose a playback speed:", reply_markup=speed_keyboard)
+                    return
+                speed = speed_factor
                 atempo = min(max(speed, 0.5), 4.0)
                 out = outdir / f"{src.stem}_speed{atempo}x{src.suffix or '.mp4'}"
                 mime, ext = detect_type(src)
@@ -1743,7 +2596,10 @@ async def cmd_protect(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if context.user_data is not None:
         context.user_data["pdf_password"] = password
     if update.effective_message:
-        await update.effective_message.reply_text(f"🔒 Password set. Now send a PDF file and tap '🔒 Password protect'.")
+        masked = "*" * len(password)
+        await update.effective_message.reply_text(
+            f"✅ Password `{masked}` saved. Now send a PDF and tap 🔒 Password protect."
+        )
 
 
 async def cmd_unlock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1759,7 +2615,10 @@ async def cmd_unlock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if context.user_data is not None:
         context.user_data["pdf_password"] = password
     if update.effective_message:
-        await update.effective_message.reply_text(f"🔓 Unlock password set. Now send the encrypted PDF and tap '🔓 Remove password'.")
+        masked = "*" * len(password)
+        await update.effective_message.reply_text(
+            f"✅ Password `{masked}` saved. Now send a PDF and tap 🔓 Remove password."
+        )
 
 
 # ── Feature: Audio/Video Speed Command ─────────────────────────────────────────
@@ -1876,6 +2735,7 @@ def main() -> None:
     application.add_handler(CommandHandler("unlock", cmd_unlock))
     application.add_handler(CommandHandler("speed", cmd_speed))
     application.add_handler(CommandHandler("voiceai", cmd_voiceai))
+    application.add_handler(CommandHandler("tempmail", cmd_tempmail))
     application.add_handler(CallbackQueryHandler(callback))
     application.add_handler(MessageHandler(filters.PHOTO, on_photo))
     application.add_handler(MessageHandler(filters.Document.ALL, on_document))
