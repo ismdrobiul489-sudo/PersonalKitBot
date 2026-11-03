@@ -1,51 +1,207 @@
-# Private Telegram Utility Bot Prototype
+# Private Telegram Utility Bot
 
-A private long-polling Telegram bot intended for one BotKeep worker slot. The configured owner is always authorized and cannot be removed through bot commands; the owner can dynamically grant or revoke access for other Telegram user IDs. The bot limits incoming files to 20 MB, serializes heavy jobs, and removes temporary files after about 30 minutes.
+A high-performance, lightweight, private Telegram utility bot built with Python (`python-telegram-bot` v20+ async) and designed for low-resource environments (Linux VPS, Google Cloud Shell, BotKeep worker slots).
 
-Use Python 3.10 or newer.
+The bot serializes heavy background jobs, restricts incoming files to 20 MB, enforces strict owner/allowlist access control, and automatically cleans up temporary files.
 
-## Run locally
+---
 
-From this directory:
+## 🌟 Key Features & Modules
 
+### 📬 1. Disposable Temporary Email & OTP Receiver (`/tempmail`)
+- **100% Free & Unlimited**: Powered by the Mail.tm REST API (no API key required).
+- **Persistent Vault (`tempmail_vault.json`)**: Automatically saves generated accounts so your emails survive bot restarts.
+- **VPS Reset / Wiped Server Protection**: Displays the account **Email** and **Password** immediately with one-tap copy formatting, plus a dedicated `/tempmail restore <email> <password>` command to restore any mailbox if your server is ever reinstalled.
+- **Interactive UI**:
+  - `🔄 Check Inbox`: Checks for incoming mail and extracts 4–8 digit verification codes / OTPs using smart regex.
+  - `🆕 New Email`: Generates a fresh temporary email with instant credentials.
+  - `📜 Saved Emails (X)`: Lists your previously created mailboxes with one-click switching.
+  - `🏷️ Set Label`: Gives mailboxes memorable names (e.g. *Canva*, *Discord*, *ChatGPT*).
+  - `🔐 Backup Key`: Directly outputs full email credentials and the one-line restore command.
+  - `🗑️ Close Active` / `Delete from Vault`: Safe mailbox lifecycle management.
+- **Custom Username Creation**: `/tempmail custom <name>` (e.g., `/tempmail custom robiservice`).
+
+---
+
+### 🛡️ 2. Privacy & Metadata / EXIF Toolkit (`privacy.py`)
+Triggered automatically on uploaded images or media via the `🛡️ Metadata Tools` button:
+- **View Metadata**: Extracts camera make/model, capture date, software, and GPS coordinates with a clickable Google Maps link.
+- **Delete EXIF**: Purges 100% of EXIF tags, GPS coordinates, and camera profiles for total privacy.
+- **Customise / Spoof Metadata**:
+  - Disguise camera model as *Sony Alpha 7 IV*, *iPhone 15 Pro Max*, or *Canon EOS R5*.
+  - Inject custom photographer / author copyright tags.
+  - Reset capture timestamps to the current date and time.
+
+---
+
+### 🎙️ 3. Groq Whisper Subtitles & Transcription
+- **Word-Level Chunking**: Generates subtitle cues chunked into strictly 3–4 words per cue using Groq Whisper `timestamp_granularities=["word", "segment"]`.
+- **Interactive Delivery**:
+  - Inline preview of the first 400 characters.
+  - Format buttons: `📄 Plain Text (.txt)`, `📋 SubRip (.srt)`, `🌐 WebVTT (.vtt)`, and `📦 All Formats (.zip)`.
+
+---
+
+### 🤖 4. Voice & AI Integration
+- **Voice-to-AI**: Automatically transcribes incoming Telegram voice notes and responds with intelligent LLM insights (toggle on/off with `/voiceai`).
+- **Natural Text-to-Speech (`/tts`)**:
+  - Automatic language detection (English, Bengali, Hindi, Arabic, Urdu, etc.).
+  - Interactive inline voice picker for Female and Male voices (`edge-tts`).
+- **AI Text Operations**: Summarize, polish grammar, analyze sentiments, and translate with an interactive 8-language target picker.
+
+---
+
+### 🖼️ 5. Image & Graphic Utilities
+- **Format Conversion**: JPG, PNG, WebP, animated GIF.
+- **Resolution Resizing**: 1080p, 720p, Square, 50%, 25%.
+- **OCR Text Extraction**: Supports English, Bengali (`tesseract-ocr-ben`), Hindi, and Arabic.
+- **Watermarking**: Interactive chat prompt to apply custom text watermarks.
+- **Stickers**: One-click Telegram sticker converter (512×512 transparent WebP).
+
+---
+
+### 📑 6. PDF Power Tools
+- **Split**: Safely split PDFs up to 80 pages into a downloadable ZIP archive.
+- **Compress**: High-efficiency compression via `pikepdf`.
+- **Images**: Export the first 10 pages as high-quality image renders.
+- **Merge**: Combine multiple PDFs into a single document (`/mergepdf`).
+- **Password Protection**: Encrypt PDFs with `/protect <password>`.
+- **Password Unlock**: Decrypt protected PDFs with `/unlock <password>`.
+- **Rotate**: 90° clockwise page rotation.
+
+---
+
+### 🎬 7. Audio & Video Processing
+- **Audio Extraction**: Convert any video file or voice note to MP3.
+- **Speed Adjustment**: Select playback factor (0.75x, 1.25x, 1.5x, 2.0x, 3.0x) via buttons or `/speed <factor>`.
+- **Precision Trimming**: Interactive chat input for timestamps (e.g. `00:05 00:20` or `5 20`).
+- **GIF Maker**: Convert video clips into animated GIFs with duration pickers (3s, 5s, 8s).
+
+---
+
+### 🧰 8. Everyday Utilities
+- **Currency Converter**: Live rates via `/fx <amount> <from> <to>` (e.g. `/fx 100 USD BDT`).
+- **Smart Reminders**: Asynchronous scheduled alerts via `/remind <time> <message>` (e.g. `/remind 30m Take medicine`).
+- **Article Reader**: Extract clean readable text from web pages via `/read <URL>`.
+- **QR Codes**: Generate QR images from text/links, or scan uploaded QR codes.
+- **Unit & Time Converter**: Fast conversions via `/convert <amount> <from> <to>`.
+- **ZIP Archives**: Create and safely extract ZIP files.
+- **YouTube Metadata**: Inspect public video metadata and captions (downloads disabled).
+
+---
+
+## ⌨️ Command Reference
+
+| Command | Usage Example | Description |
+| :--- | :--- | :--- |
+| `/tempmail` | `/tempmail` | Show active disposable email or generate a new one |
+| `/tempmail history` | `/tempmail history` | View all saved disposable mailboxes and passwords |
+| `/tempmail custom` | `/tempmail custom robiservice` | Create a disposable email with custom username |
+| `/tempmail restore` | `/tempmail restore email pass` | Restore an old mailbox after a VPS reset |
+| `/tts` | `/tts Hello world` | Text-to-Speech with Male/Female voice selector |
+| `/voiceai` | `/voiceai` | Toggle automatic Voice-to-AI mode (ON/OFF) |
+| `/remind` | `/remind 45m Submit report` | Set a background timer reminder |
+| `/fx` | `/fx 150 USD EUR` | Convert currencies using real-time rates |
+| `/read` | `/read https://example.com/post` | Extract clean article content from a web page |
+| `/protect` | `/protect MySecret123` | Set PDF encryption password |
+| `/unlock` | `/unlock MySecret123` | Remove PDF password encryption |
+| `/speed` | `/speed 1.5` | Set audio/video playback speed multiplier |
+| `/myid` | `/myid` | Get your numeric Telegram user ID |
+| `/help` | `/help` | Display interactive help menu |
+
+### Owner-Only Access Controls:
+| Command | Description |
+| :--- | :--- |
+| `/access` or `/allowlist` | List approved Telegram user IDs |
+| `/allow <user_id>` | Grant bot access to a user |
+| `/deny <user_id>` | Revoke bot access from a user |
+
+---
+
+## ⚙️ Environment Configuration
+
+Create a `.env` file in the root directory (refer to `.env.example`):
+
+```ini
+# Required
+TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
+OWNER_USER_ID=123456789
+
+# AI & Transcription
+GROQ_API_KEY="gsk_..."
+NVIDIA_API_KEY=""                # Optional fallback LLM provider
+OCR_LANG="eng+ben"               # Tesseract language code (requires tesseract-ocr-ben)
+
+# Access Control
+ALLOWED_USER_IDS="123456789"
+ALLOWLIST_FILE="allowlist.json"
+```
+
+---
+
+## 🚀 Installation & Deployment
+
+### 1. System Prerequisites (Debian/Ubuntu/VPS)
 ```bash
 sudo apt-get update
 sudo apt-get install -y ffmpeg tesseract-ocr poppler-utils ghostscript
-# Optional Bengali OCR data: sudo apt-get install -y tesseract-ocr-ben
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-cp .env.example .env
+# Optional Bengali language support for OCR:
+sudo apt-get install -y tesseract-ocr-ben
 ```
 
-The `.env.example` already contains the owner's permanent Telegram user ID. Set `TELEGRAM_BOT_TOKEN` before starting. If you run the bot under a different owner, replace `OWNER_USER_ID` with that account's numeric Telegram ID. Only the owner can use `/allow`, `/deny`, `/access`, and `/allowlist`.
-
+### 2. Python Environment Setup
 ```bash
-python main.py
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-On BotKeep, install the system tools using its supported system-package mechanism, install Python requirements with `pip install -r requirements.txt`, set the same environment variables in its settings, and use `python3 main.py` as the long-running worker command. Keep `ALLOWLIST_FILE` on persistent storage so changes survive restarts. Do not commit `.env` or paste API tokens into public logs.
+### 3. Start the Bot
+```bash
+python3 main.py
+```
 
-## Included in this prototype
+### 4. Background Execution on VPS (systemd or tmux)
+To keep the bot running 24/7 on your server:
 
-The bot presents file-matched inline actions for images, PDFs, audio/video, ZIPs, and text/data files. It includes:
-- **Images**: resizing/compression/conversion (JPG/PNG/WebP), rotation, center-crop, OCR, image-to-PDF, Telegram sticker generation (512×512 WebP), and custom text watermark.
-- **PDFs**: text extraction, rotation, compression, page splitting, first-ten-page image export, multi-file merging (`/mergepdf`), password protection (`/protect`), and password removal (`/unlock`).
-- **Audio & Video**: conversion to MP3, audio extraction, video/audio compression, trimming (`/trim`), speed-up adjustment (`/speed`), animated GIF creation, and Groq Whisper transcription with SRT/VTT sidecars.
-- **Voice & AI**: Voice-to-AI automatic transcription and direct AI replies (toggle with `/voiceai`), Text-to-Speech (`/tts`) with automatic language detection and interactive voice selection buttons (Female/Male, Bengali, English, Hindi, Arabic, Urdu), AI summarize/polish/analyze/translate.
-- **Text & Data**: cleanup/counting, URL encoding/decoding, JSON formatting, CSV/TSV-to-JSON conversion.
-- **Everyday Utilities**: disposable temporary email with auto-OTP extraction (`/tempmail`), scheduled reminders (`/remind`), live currency converter (`/fx`), webpage article extractor (`/read`), unit and time conversion (`/convert`), QR creation/reading, file info/SHA-256, and ZIP creation/safe extraction.
-- **YouTube**: metadata plus accessible captions only (with `cookies.txt` support). Video downloads are disabled.
+**Using `tmux` (Fastest):**
+```bash
+tmux new -s bot
+source .venv/bin/activate
+python3 main.py
+# Press Ctrl+B then D to detach
+```
 
-## Required settings
+**Using `systemd` (Recommended for production):**
+Create `/etc/systemd/system/personal-kit-bot.service`:
+```ini
+[Unit]
+Description=Personal Kit Telegram Bot
+After=network.target
 
-- `TELEGRAM_BOT_TOKEN`: token for the Telegram bot.
-- `OWNER_USER_ID`: the owner's positive numeric Telegram user ID. The owner is always authorized and `/deny` cannot remove them.
-- `ALLOWED_USER_IDS`: optional comma-separated initial IDs. Imported only if the persistent allow-list file does not exist.
-- `ALLOWLIST_FILE`: path to the JSON file used to persist dynamic access changes; defaults to `allowlist.json` in the current working directory.
-- `GROQ_API_KEY`: needed for transcription; used for AI text if supplied.
-- `NVIDIA_API_KEY`: optional fallback AI provider, with model/base URL configurable.
-- `OCR_LANG`: Tesseract language code; `eng+ben` requires Bengali OCR data to be installed.
+[Service]
+Type=simple
+User=ismdrobiul488
+WorkingDirectory=/home/ismdrobiul488/PersonalKitBot
+ExecStart=/home/ismdrobiul488/PersonalKitBot/.venv/bin/python3 main.py
+Restart=always
+RestartSec=5
 
-When authorized as the owner, use `/access` or `/allowlist` to view approved IDs, `/allow <user_id>` to grant access, and `/deny <user_id>` to revoke it. The owner ID is held separately from the mutable list and remains authorized even if the JSON file is edited. This is a prototype, not yet connected to BotKeep or Telegram. Keep the BotKeep slot within its shared resource limits; the bot allows only one heavy operation at a time. Bot API file downloads and outgoing files are capped at 20 MB. PDF-to-image export is limited to the first 10 pages, and PDF splitting to 80 pages per operation.
+[Install]
+WantedBy=multi-user.target
+```
+Enable and start the service:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable personal-kit-bot
+sudo systemctl start personal-kit-bot
+```
+
+---
+
+## 🔒 Security & Privacy
+- **Strict Authorization**: Unauthorized users are silently blocked.
+- **Isolated Storage**: Each user's uploaded files are processed in isolated per-user directories (`user_files/<user_id>`).
+- **Credential Safety**: `tempmail_vault.json`, `allowlist.json`, `.env`, and cookies are automatically excluded from Git commits via `.gitignore`.
+- **Zero Heavy Models**: Does not load multi-gigabyte neural networks into RAM; runs smoothly on 512 MB – 1 GB RAM VPS instances.

@@ -40,7 +40,7 @@ from telegram.ext import (
     filters,
 )
 from dotenv import load_dotenv
-from tempmail import cmd_tempmail, handle_tempmail_callback
+from tempmail import cmd_tempmail, handle_tempmail_callback, update_account_label
 from privacy import (
     customize_image_metadata,
     customize_media_metadata,
@@ -265,7 +265,7 @@ async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.effective_message.reply_text(
         "Private Utility Bot is ready. Send a photo, audio, video, PDF, ZIP, text/data file, or a video/channel URL. "
-        "I’ll show matching tools. Use /help for commands. Temporary files are deleted after 30 minutes."
+        "I’ll show matching tools. Use /help or /helpe for the complete command manual. Temporary files are deleted after 30 minutes."
     )
 
 
@@ -273,36 +273,70 @@ async def on_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await authorized(update):
         return
     help_text = (
-        "Commands:\n"
-        "/myid — show your numeric Telegram user ID\n"
-        "/qr <text> — create a QR image\n"
-        "/ai <summarize|polish|analyze|translate> <text> — AI text help\n"
-        "/transcribe — transcribe the last uploaded audio/video\n"
-        "/trim <start> <end> — trim the last audio/video, e.g. /trim 00:05 00:20\n"
-        "/mergepdf — start collecting PDFs; /finishmerge to merge; /cancelmerge to stop\n"
-        "/convert <value> <unit> — convert km↔mi, kg↔lb, C↔F, cm↔in\n"
-        "/tts <text> — text-to-speech (detects language & shows voice buttons)\n"
-        "/remind <duration> <message> — set a reminder, e.g. /remind 30m Take medicine\n"
-        "/fx <amount> <from> <to> — currency converter, e.g. /fx 100 USD BDT\n"
-        "/read <URL> — extract article text from a webpage\n"
-        "/protect <password> — set PDF password, then send PDF\n"
-        "/unlock <password> — set unlock password, then send encrypted PDF\n"
-        "/speed <factor> — set speed (0.5–4.0), then use ⏩ Speed up button\n"
-        "/voiceai — toggle voice-to-AI mode (default: ON)\n"
-        "/tempmail — disposable email to receive OTP/verification codes\n"
-        "/help — show this help\n\n"
-        "Send a video URL for metadata and available captions only; the bot never downloads the video. "
-        "Voice messages are auto-transcribed and answered by AI (toggle with /voiceai). "
-        "Max upload size: 20 MB. Access is restricted to the owner and approved user IDs."
+        "📖 **Private Utility Bot — Detailed Command Manual**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "📬 **1. Disposable Temp Mail & OTP Receiver**\n"
+        "• `/tempmail` — View active mailbox, password & check inbox\n"
+        "• `/tempmail history` — View all saved mailboxes & backup passwords\n"
+        "• `/tempmail custom <name>` — Create email with custom username\n"
+        "  _Example:_ `/tempmail custom robi`\n"
+        "• `/tempmail restore <email> <pass>` — Restore an old email (even after VPS wipe)\n"
+        "  _Example:_ `/tempmail restore usr_abc@domain.com mypass123`\n"
+        "👉 *Interactive Buttons:* `🔄 Check Inbox`, `🆕 New Email`, `📜 Saved Emails`, `🏷️ Set Label`, `🔐 Backup Key`, `🗑️ Close Active`\n\n"
+        "🤖 **2. Voice & AI Intelligence**\n"
+        "• `/voiceai` — Toggle auto Voice-to-AI mode (ON/OFF) for instant AI replies to voice notes\n"
+        "• `/tts <text>` — Convert text to speech with Male/Female voice selector\n"
+        "  _Example:_ `/tts Hello, welcome to our bot!`\n"
+        "• `/ai <action> <text>` — Actions: `summarize`, `polish`, `analyze`, `translate`\n"
+        "  _Example:_ `/ai summarize Paste long article here...`\n"
+        "  _Example:_ `/ai translate Hello, how are you?` (choose from 8 target languages)\n"
+        "• `/transcribe` — Transcribe last audio/video with Word-Chunked subtitles (`.txt`, `.srt`, `.vtt`, `.zip`)\n\n"
+        "🛡️ **3. Privacy & Metadata / EXIF Tools**\n"
+        "• Upload any photo or media and tap **`🛡️ Metadata Tools`**:\n"
+        "  - `🔍 View` — Camera model, date, software & Google Maps GPS link\n"
+        "  - `🗑️ Delete` — 100% EXIF & location wipe for total privacy\n"
+        "  - `✏️ Customise` — Camouflage as Sony A7 IV / iPhone 15 Pro, set author & date\n\n"
+        "📑 **4. PDF Power Tools**\n"
+        "• Upload any PDF to use one-click buttons:\n"
+        "  - `🔒 Protect` or `/protect <password>` — Password encrypt PDF\n"
+        "  - `🔓 Unlock` or `/unlock <password>` — Remove password encryption\n"
+        "  - `✂️ Split Pages` — Split up to 80 pages into individual PDFs (ZIP)\n"
+        "  - `🗜️ Compress PDF` — Reduce PDF file size\n"
+        "  - `🖼️ PDF to Images` — Render first 10 pages into high-res images\n"
+        "  - `🔄 Rotate 90°` — Rotate PDF pages clockwise\n"
+        "• `/mergepdf` — Start merging multiple PDFs (`/finishmerge` to compile, `/cancelmerge` to cancel)\n\n"
+        "🎬 **5. Audio & Video Tools**\n"
+        "• Upload any video or audio file to use one-click buttons:\n"
+        "  - `✂️ Trim` or `/trim <start> <end>` — Trim clip (e.g. `/trim 00:05 00:20` or `5 20`)\n"
+        "  - `⏩ Speed up` or `/speed <factor>` — 0.75x, 1.25x, 1.5x, 2.0x, 3.0x speed\n"
+        "  - `🎵 Extract MP3` — Convert video/audio to high-quality MP3\n"
+        "  - `🎞️ Make GIF` — Convert video clips to animated GIF (3s, 5s, 8s)\n"
+        "  - `🗜️ Compress Media` — Compress video/audio size\n\n"
+        "🖼️ **6. Image & Photo Tools**\n"
+        "• Upload any photo to use one-click buttons:\n"
+        "  - `📐 Resize` — 1080p, 720p, Square, 50%, 25%\n"
+        "  - `💧 Watermark` — Add custom text watermark\n"
+        "  - `🔍 OCR Text` — Extract text (English, Bengali, Hindi, Arabic)\n"
+        "  - `🔄 Convert` — Convert to JPG, PNG, WebP\n"
+        "  - `🎭 Make Sticker` — Convert to 512×512 Telegram sticker\n\n"
+        "🧰 **7. Everyday Utilities**\n"
+        "• `/fx <amount> <from> <to>` — Real-time currency exchange (e.g. `/fx 100 USD BDT`)\n"
+        "• `/remind <time> <message>` — Timer reminder (e.g. `/remind 30m Take medicine`, `/remind 2h Meeting`)\n"
+        "• `/read <URL>` — Extract clean article text from any webpage\n"
+        "• `/qr <text>` — Generate a QR code (or upload any QR image to scan it)\n"
+        "• `/convert <value> <unit>` — Convert km↔mi, kg↔lb, C↔F, cm↔in\n"
+        "• `/myid` — Show your numeric Telegram user ID\n"
+        "• `/help` or `/helpe` — Show this manual\n\n"
+        "💡 *Pro-tip:* Just upload any file (Photo, PDF, Video, Audio) and the bot will automatically show you all matching tool buttons!"
     )
     if update.effective_user and update.effective_user.id == OWNER_USER_ID:
         help_text += (
-            "\n\nOwner access controls:\n"
-            "/access or /allowlist — show the current allow list\n"
-            "/allow <user_id> — grant access\n"
-            "/deny <user_id> — revoke access"
+            "\n\n👑 **Owner Access Controls:**\n"
+            "• `/access` or `/allowlist` — View approved user IDs\n"
+            "• `/allow <user_id>` — Grant bot access to a user\n"
+            "• `/deny <user_id>` — Revoke bot access from a user"
         )
-    await update.effective_message.reply_text(help_text)
+    await update.effective_message.reply_text(help_text, parse_mode="Markdown")
 
 
 async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1171,6 +1205,25 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await update.message.reply_text(f"❌ Failed: {str(exc)[:600]}")
         else:
             await update.message.reply_text("Please upload a media file first.")
+        return
+
+    # Check if we're awaiting a label for temporary email
+    if user_data.get("awaiting_tempmail_label"):
+        label = text.strip()[:30]
+        if context.user_data is not None:
+            context.user_data.pop("awaiting_tempmail_label", None)
+        active_mail = user_data.get("tempmail")
+        if active_mail and active_mail.get("address"):
+            addr = active_mail["address"]
+            active_mail["label"] = label
+            update_account_label(update.effective_user.id, addr, label)
+            await update.message.reply_text(
+                f"🏷️ Label set to **{label}** for:\n`{addr}`\n\n"
+                f"💡 This mailbox is saved with this label in your **📜 Saved Emails** vault.",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text("No active disposable email found to label. Send /tempmail first.")
         return
 
     context.user_data["last_text"] = text
@@ -2715,7 +2768,7 @@ def main() -> None:
     application = Application.builder().token(token).build()
     application.add_handler(CommandHandler("myid", cmd_myid))
     application.add_handler(CommandHandler("start", on_start))
-    application.add_handler(CommandHandler("help", on_help))
+    application.add_handler(CommandHandler(["help", "helpe"], on_help))
     application.add_handler(CommandHandler(["access", "allowlist"], cmd_allowlist))
     application.add_handler(CommandHandler("allow", cmd_allow))
     application.add_handler(CommandHandler("deny", cmd_deny))
