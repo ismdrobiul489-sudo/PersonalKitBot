@@ -13,7 +13,8 @@ The bot serializes heavy background jobs, restricts incoming files to 20 MB, enf
 - **Persistent Vault (`tempmail_vault.json`)**: Automatically saves generated accounts so your emails survive bot restarts.
 - **VPS Reset / Wiped Server Protection**: Displays the account **Email** and **Password** immediately with one-tap copy formatting, plus a dedicated `/tempmail restore <email> <password>` command to restore any mailbox if your server is ever reinstalled.
 - **Interactive UI**:
-  - `🔄 Check Inbox`: Checks for incoming mail and extracts 4–8 digit verification codes / OTPs using smart regex.
+  - `🔄 Check Inbox`: Checks for incoming mail, extracts 4–8 digit verification codes / OTPs, and detects verification/confirmation links.
+  - `📋 Copy Link`: 1-tap copy button for verification URLs (so you can copy & paste them into any browser/incognito window).
   - `🆕 New Email`: Generates a fresh temporary email with instant credentials.
   - `📜 Saved Emails (X)`: Lists your previously created mailboxes with one-click switching.
   - `🏷️ Set Label`: Gives mailboxes memorable names (e.g. *Canva*, *Discord*, *ChatGPT*).
@@ -110,11 +111,11 @@ Triggered automatically on uploaded images or media via the `🛡️ Metadata To
 | `/help` | `/help` | Display interactive help menu |
 
 ### Owner-Only Access Controls:
-| Command | Description |
-| :--- | :--- |
-| `/access` or `/allowlist` | List approved Telegram user IDs |
-| `/allow <user_id>` | Grant bot access to a user |
-| `/deny <user_id>` | Revoke bot access from a user |
+| Command | Usage Example | Description |
+| :--- | :--- | :--- |
+| `/access` or `/allowlist` | `/allowlist` | List approved users with full names, usernames, and tap-to-copy IDs |
+| `/allow` | `/allow 1234567890 Rahim` | Grant access to a user (unlimited); profile name auto-syncs on first start |
+| `/deny` | `/deny 1234567890` | Revoke bot access from a user |
 
 ---
 

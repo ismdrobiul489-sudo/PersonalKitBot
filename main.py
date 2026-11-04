@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+from datetime import datetime
 import hashlib
 import io
 import json
@@ -73,6 +74,8 @@ WORK_DIR = Path(os.getenv("WORK_DIR", "/tmp/telegram_utility_bot"))
 ALLOWLIST_FILE = Path(os.getenv("ALLOWLIST_FILE", "allowlist.json"))
 OWNER_USER_ID: Optional[int] = None
 ALLOWED_USERS: set[int] = set()
+ALLOWED_USER_PROFILES: dict[int, dict] = {}
+OWNER_PROFILE: dict = {}
 
 
 def parse_user_ids(raw: str, setting_name: str) -> set[int]:
@@ -89,13 +92,81 @@ def parse_user_ids(raw: str, setting_name: str) -> set[int]:
 def save_allowed_users() -> None:
     ALLOWLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = ALLOWLIST_FILE.with_suffix(ALLOWLIST_FILE.suffix + ".tmp")
-    temporary.write_text(json.dumps(sorted(ALLOWED_USERS), indent=2) + "\n", encoding="utf-8")
+    data = {
+        "users": {
+            str(uid): ALLOWED_USER_PROFILES.get(
+                uid,
+                {
+                    "id": uid,
+                    "full_name": "Pending first interaction",
+                    "username": "",
+                    "added_at": "",
+                    "last_seen": "",
+                },
+            )
+            for uid in sorted(ALLOWED_USERS)
+        },
+        "owner": OWNER_PROFILE,
+    }
+    temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     temporary.replace(ALLOWLIST_FILE)
+
+
+def sync_user_profile(user) -> bool:
+    """Capture or update user profile info (name, username, last seen) in persistent allowlist storage."""
+    if not user:
+        return False
+    uid = user.id
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    full_name = (user.full_name or f"{user.first_name or ''} {user.last_name or ''}").strip() or "Unknown"
+    uname = f"@{user.username}" if user.username else ""
+
+    changed = False
+
+    # Owner profile sync
+    if uid == OWNER_USER_ID:
+        if OWNER_PROFILE.get("full_name") != full_name or OWNER_PROFILE.get("username") != uname:
+            OWNER_PROFILE["full_name"] = full_name
+            OWNER_PROFILE["username"] = uname
+            OWNER_PROFILE["last_seen"] = now_str
+            changed = True
+        else:
+            OWNER_PROFILE["last_seen"] = now_str
+
+    # Allowed user profile sync
+    if uid in ALLOWED_USERS:
+        prof = ALLOWED_USER_PROFILES.get(uid)
+        if not prof:
+            ALLOWED_USER_PROFILES[uid] = {
+                "id": uid,
+                "full_name": full_name,
+                "username": uname,
+                "added_at": now_str,
+                "last_seen": now_str,
+            }
+            changed = True
+        else:
+            prev_name = prof.get("full_name", "")
+            if prev_name in {"Pending first interaction", "Config seed", ""} or prev_name != full_name or prof.get("username") != uname:
+                prof["full_name"] = full_name
+                prof["username"] = uname
+                prof["last_seen"] = now_str
+                changed = True
+            else:
+                prof["last_seen"] = now_str
+
+    if changed:
+        try:
+            save_allowed_users()
+            return True
+        except Exception as exc:
+            log.warning("Could not persist allowlist profile update: %s", exc)
+    return False
 
 
 def initialize_access_control() -> None:
     """Load the immutable owner ID and the persistent, owner-managed allow list."""
-    global OWNER_USER_ID, ALLOWED_USERS
+    global OWNER_USER_ID, ALLOWED_USERS, ALLOWED_USER_PROFILES, OWNER_PROFILE
     raw_owner = os.getenv("OWNER_USER_ID", "").strip()
     if raw_owner and (not raw_owner.isdigit() or int(raw_owner) <= 0):
         raise SystemExit("OWNER_USER_ID must be a positive numeric Telegram user ID.")
@@ -103,20 +174,66 @@ def initialize_access_control() -> None:
     seed_users = parse_user_ids(os.getenv("ALLOWED_USER_IDS", ""), "ALLOWED_USER_IDS")
     seed_users.discard(OWNER_USER_ID)
 
+    ALLOWED_USERS = set()
+    ALLOWED_USER_PROFILES = {}
+    OWNER_PROFILE = {}
+
     if ALLOWLIST_FILE.exists():
         try:
             stored = json.loads(ALLOWLIST_FILE.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise SystemExit(f"Could not read allow-list file {ALLOWLIST_FILE}: {exc}") from exc
-        if not isinstance(stored, list) or any(
-            isinstance(user_id, bool) or not isinstance(user_id, int) or user_id <= 0 for user_id in stored
-        ):
-            raise SystemExit(f"Allow-list file {ALLOWLIST_FILE} must contain a JSON list of positive numeric IDs.")
-        ALLOWED_USERS = set(stored)
-        ALLOWED_USERS.discard(OWNER_USER_ID)
-    else:
-        ALLOWED_USERS = seed_users
-        save_allowed_users()
+
+        # Backward compatibility: legacy list of integers [123, 456]
+        if isinstance(stored, list):
+            for item in stored:
+                if isinstance(item, int) and item > 0 and item != OWNER_USER_ID:
+                    ALLOWED_USERS.add(item)
+                    ALLOWED_USER_PROFILES[item] = {
+                        "id": item,
+                        "full_name": "Pending first interaction",
+                        "username": "",
+                        "added_at": "Earlier",
+                        "last_seen": "",
+                    }
+        # New dictionary format with user profiles
+        elif isinstance(stored, dict):
+            users_dict = stored.get("users", {})
+            if isinstance(users_dict, dict):
+                for uid_str, info in users_dict.items():
+                    if uid_str.isdigit() and int(uid_str) > 0:
+                        uid = int(uid_str)
+                        if uid != OWNER_USER_ID:
+                            ALLOWED_USERS.add(uid)
+                            if isinstance(info, dict):
+                                ALLOWED_USER_PROFILES[uid] = info
+                            else:
+                                ALLOWED_USER_PROFILES[uid] = {
+                                    "id": uid,
+                                    "full_name": "Pending first interaction",
+                                    "username": "",
+                                    "added_at": "",
+                                    "last_seen": "",
+                                }
+            owner_dict = stored.get("owner", {})
+            if isinstance(owner_dict, dict):
+                OWNER_PROFILE = owner_dict
+        else:
+            raise SystemExit(f"Allow-list file {ALLOWLIST_FILE} format is unrecognized.")
+
+    # Incorporate initial seed users from .env if any
+    for uid in seed_users:
+        if uid not in ALLOWED_USERS:
+            ALLOWED_USERS.add(uid)
+            ALLOWED_USER_PROFILES[uid] = {
+                "id": uid,
+                "full_name": "Pending first interaction",
+                "username": "",
+                "added_at": "Config seed",
+                "last_seen": "",
+            }
+
+    save_allowed_users()
 
 
 def user_dir(user_id: int) -> Path:
@@ -175,6 +292,8 @@ async def authorized(update: Update) -> bool:
             )
             await update.effective_message.reply_text(reason)
         return False
+    # User is authorized - automatically sync & update profile info (name, username, last seen)
+    sync_user_profile(user)
     return True
 
 
@@ -332,8 +451,8 @@ async def on_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user and update.effective_user.id == OWNER_USER_ID:
         help_text += (
             "\n\n👑 **Owner Access Controls:**\n"
-            "• `/access` or `/allowlist` — View approved user IDs\n"
-            "• `/allow <user_id>` — Grant bot access to a user\n"
+            "• `/access` or `/allowlist` — View approved users list (with names & tap-to-copy IDs)\n"
+            "• `/allow <user_id> [name]` — Grant access to a user (unlimited)\n"
             "• `/deny <user_id>` — Revoke bot access from a user"
         )
     await update.effective_message.reply_text(help_text, parse_mode="Markdown")
@@ -348,52 +467,145 @@ async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_allowlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await owner_only(update):
         return
-    allowed = sorted(ALLOWED_USERS)
-    entries = "\n".join(str(user_id) for user_id in allowed) or "(empty)"
-    await update.effective_message.reply_text(
-        f"Permanent owner: {OWNER_USER_ID} (always authorized)\n"
-        f"Additional allow-list IDs:\n{entries}\n\n"
-        "Use /allow <user_id> to add someone or /deny <user_id> to remove them."
-    )
+
+    # Update owner profile
+    if update.effective_user:
+        sync_user_profile(update.effective_user)
+
+    lines = [
+        "🛡️ **Access Control & Approved Users List**",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
+    ]
+
+    # Owner section
+    owner_name = OWNER_PROFILE.get("full_name") or ""
+    owner_uname = OWNER_PROFILE.get("username") or ""
+    owner_meta = f" — {owner_name} ({owner_uname})" if (owner_name or owner_uname) else ""
+    lines.append(f"👑 **Permanent Owner:**\n• 🆔 ID: `{OWNER_USER_ID}`{owner_meta}\n")
+
+    # Approved users list
+    if not ALLOWED_USERS:
+        lines.append("👥 **Approved Users (Total: 0):** None (empty)")
+        lines.append("Use `/allow <user_id> [optional name]` to grant access.\n")
+    else:
+        lines.append(f"👥 **Approved Users (Total: {len(ALLOWED_USERS)}):**\n")
+        sorted_uids = sorted(ALLOWED_USERS)
+        for idx, uid in enumerate(sorted_uids, start=1):
+            prof = ALLOWED_USER_PROFILES.get(uid, {})
+            name = prof.get("full_name") or "Pending first interaction"
+            uname = prof.get("username") or ""
+            uname_str = f" ({uname})" if uname else ""
+            added = prof.get("added_at") or ""
+            last_active = prof.get("last_seen") or ""
+
+            lines.append(f"{idx}. 👤 **{name}**{uname_str}")
+            lines.append(f"   🆔 ID: `{uid}`")
+            if last_active:
+                lines.append(f"   🕒 Last active: {last_active}")
+            elif added:
+                lines.append(f"   🕒 Status: ⏳ Pending first interaction (Added: {added})")
+            else:
+                lines.append(f"   🕒 Status: ⏳ Pending first interaction")
+            lines.append("")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("💡 *Tip:* Tap on any User ID above to copy it instantly.")
+    lines.append("• Add user: `/allow <user_id> [optional name]`")
+    lines.append("• Remove user: `/deny <user_id>`")
+
+    if update.effective_message:
+        await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def cmd_allow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await owner_only(update):
         return
     args = context.args or []
-    if len(args) != 1 or not args[0].isdigit() or int(args[0]) <= 0:
+    if not args or not args[0].isdigit() or int(args[0]) <= 0:
         if update.effective_message:
-            await update.effective_message.reply_text("Usage: /allow <positive numeric Telegram user ID>")
+            await update.effective_message.reply_text(
+                "Usage: `/allow <user_id> [optional name]`\nExample: `/allow 1234567890 Rahim`",
+                parse_mode="Markdown",
+            )
         return
     user_id = int(args[0])
+    optional_name = " ".join(args[1:]).strip()
+
     if user_id == OWNER_USER_ID:
         if update.effective_message:
             await update.effective_message.reply_text("The owner is permanently authorized and does not need to be added.")
         return
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # If already allowed, allow updating their custom note/label
     if user_id in ALLOWED_USERS:
-        if update.effective_message:
-            await update.effective_message.reply_text(f"Telegram user {user_id} is already on the allow list.")
+        if optional_name:
+            if user_id in ALLOWED_USER_PROFILES:
+                ALLOWED_USER_PROFILES[user_id]["full_name"] = optional_name
+            else:
+                ALLOWED_USER_PROFILES[user_id] = {
+                    "id": user_id,
+                    "full_name": optional_name,
+                    "username": "",
+                    "added_at": now_str,
+                    "last_seen": "",
+                }
+            save_allowed_users()
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    f"✅ Updated name/note for user `{user_id}` to **{optional_name}**.",
+                    parse_mode="Markdown",
+                )
+        else:
+            if update.effective_message:
+                prof = ALLOWED_USER_PROFILES.get(user_id, {})
+                name = prof.get("full_name") or "User"
+                await update.effective_message.reply_text(
+                    f"Telegram user `{user_id}` ({name}) is already on the allow list.",
+                    parse_mode="Markdown",
+                )
         return
+
     ALLOWED_USERS.add(user_id)
+    ALLOWED_USER_PROFILES[user_id] = {
+        "id": user_id,
+        "full_name": optional_name or "Pending first interaction",
+        "username": "",
+        "added_at": now_str,
+        "last_seen": "",
+    }
     try:
         save_allowed_users()
     except OSError:
         ALLOWED_USERS.remove(user_id)
+        ALLOWED_USER_PROFILES.pop(user_id, None)
         log.exception("Could not persist allow-list addition")
         if update.effective_message:
             await update.effective_message.reply_text("Could not save the allow list; no access change was made.")
         return
+
+    name_label = f" ({optional_name})" if optional_name else ""
     if update.effective_message:
-        await update.effective_message.reply_text(f"Access granted to Telegram user {user_id}.")
+        await update.effective_message.reply_text(
+            f"✅ **Access Granted!**\n\n"
+            f"• User ID: `{user_id}`{name_label}\n\n"
+            f"💡 _When this user first starts or interacts with the bot, "
+            f"their full Telegram profile name and username will be automatically saved to your `/allowlist`!_",
+            parse_mode="Markdown",
+        )
 
 
 async def cmd_deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await owner_only(update):
         return
     args = context.args or []
-    if len(args) != 1 or not args[0].isdigit() or int(args[0]) <= 0:
+    if not args or not args[0].isdigit() or int(args[0]) <= 0:
         if update.effective_message:
-            await update.effective_message.reply_text("Usage: /deny <positive numeric Telegram user ID>")
+            await update.effective_message.reply_text(
+                "Usage: `/deny <user_id>`\nExample: `/deny 1234567890`",
+                parse_mode="Markdown",
+            )
         return
     user_id = int(args[0])
     if user_id == OWNER_USER_ID:
@@ -402,19 +614,31 @@ async def cmd_deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if user_id not in ALLOWED_USERS:
         if update.effective_message:
-            await update.effective_message.reply_text(f"Telegram user {user_id} is not on the allow list.")
+            await update.effective_message.reply_text(
+                f"Telegram user `{user_id}` is not on the allow list.",
+                parse_mode="Markdown",
+            )
         return
+
+    old_profile = ALLOWED_USER_PROFILES.pop(user_id, None)
+    name = old_profile.get("full_name") if old_profile else str(user_id)
     ALLOWED_USERS.remove(user_id)
     try:
         save_allowed_users()
     except OSError:
         ALLOWED_USERS.add(user_id)
+        if old_profile:
+            ALLOWED_USER_PROFILES[user_id] = old_profile
         log.exception("Could not persist allow-list removal")
         if update.effective_message:
             await update.effective_message.reply_text("Could not save the allow list; no access change was made.")
         return
+
     if update.effective_message:
-        await update.effective_message.reply_text(f"Access revoked for Telegram user {user_id}.")
+        await update.effective_message.reply_text(
+            f"🚫 **Access Revoked:**\nUser ID: `{user_id}` ({name}) has been removed from the allow list.",
+            parse_mode="Markdown",
+        )
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1564,6 +1788,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ):
         await query.answer("Not authorized", show_alert=True)
         return
+    sync_user_profile(query.from_user)
     await query.answer()
     data = query.data or ""
     parts = data.split(":")

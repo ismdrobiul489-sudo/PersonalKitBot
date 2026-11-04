@@ -5,6 +5,7 @@ Supports persistent email vault to save, label, switch, and restore old disposab
 Includes manual backup credentials (email + password) for VPS-reset protection.
 """
 
+import html
 import json
 import logging
 import os
@@ -17,6 +18,10 @@ from typing import Optional
 
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+try:
+    from telegram import CopyTextButton
+except ImportError:
+    CopyTextButton = None
 from telegram.ext import ContextTypes
 
 log = logging.getLogger("tempmail")
@@ -183,6 +188,100 @@ def extract_otp(text: str) -> Optional[str]:
     return None
 
 
+def extract_verification_links(text: str, html_content: Optional[str | list] = None) -> list[str]:
+    """
+    Extract verification/confirmation/activation URLs from email body (plain text & HTML).
+    Prioritizes verification-specific action links and filters out unhelpful social/unsubscribe links.
+    """
+    found_links: list[str] = []
+    seen = set()
+
+    def add_link(url: str):
+        clean_url = re.sub(r'[\s>\)\]\.,;:\'"]+$', '', url.strip())
+        if clean_url.startswith(("http://", "https://")) and clean_url not in seen:
+            lower = clean_url.lower()
+            if any(bad in lower for bad in [
+                "unsubscribe", "privacy", "terms", "optout", "opt-out",
+                "twitter.com", "facebook.com", "instagram.com", "linkedin.com", "youtube.com"
+            ]):
+                return
+            seen.add(clean_url)
+            found_links.append(clean_url)
+
+    # 1. Search HTML <a> tags for verification-related anchor texts or hrefs
+    raw_html = ""
+    if isinstance(html_content, list):
+        raw_html = " ".join(str(item) for item in html_content)
+    elif isinstance(html_content, str):
+        raw_html = html_content
+
+    if raw_html:
+        a_tags = re.findall(
+            r'<a\s+[^>]*href=["\'](https?://[^"\']+)["\'][^>]*>(.*?)</a>',
+            raw_html,
+            re.IGNORECASE | re.DOTALL,
+        )
+        for href, anchor_text in a_tags:
+            combined = f"{href} {anchor_text}".lower()
+            if any(kw in combined for kw in [
+                "verify", "verification", "confirm", "confirmation", "activate",
+                "activation", "validate", "login", "magic", "token", "click here", "sign up", "signup"
+            ]):
+                add_link(href)
+
+    # 2. Search plain text for URLs containing verification keywords
+    if text:
+        urls = re.findall(r'https?://[^\s<>"\']+', text)
+        for u in urls:
+            lower = u.lower()
+            if any(kw in lower for kw in ["verify", "confirm", "activate", "token", "auth", "magic", "validate"]):
+                add_link(u)
+
+    # 3. Fallback: if no verification-specific URL matched yet, check all HTML hrefs
+    if not found_links and raw_html:
+        hrefs = re.findall(r'href=["\'](https?://[^"\']+)["\']', raw_html, re.IGNORECASE)
+        for h in hrefs:
+            add_link(h)
+
+    # 4. Fallback: if still no links, take any plain text URL (up to 3)
+    if not found_links and text:
+        urls = re.findall(r'https?://[^\s<>"\']+', text)
+        for u in urls:
+            add_link(u)
+
+    return found_links[:3]
+
+
+async def safe_send_text(
+    target_msg,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+    parse_mode: Optional[str] = "HTML",
+) -> None:
+    """Send text safely to Telegram with automatic fallback to plain text if entity parsing fails."""
+    if not target_msg:
+        return
+    try:
+        await target_msg.reply_text(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+        )
+    except Exception as exc:
+        log.warning("Formatted Telegram send failed (%s), falling back to raw plain text", exc)
+        plain = re.sub(r"<[^>]+>", "", text)
+        try:
+            await target_msg.reply_text(
+                plain,
+                parse_mode=None,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+        except Exception as fallback_exc:
+            log.exception("Plain text fallback send also failed: %s", fallback_exc)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. MAIL.TM REST API CLIENT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -313,18 +412,40 @@ async def fetch_message_detail_safe(account: dict, message_id: str) -> dict:
 # 4. KEYBOARDS & UI BUILDERS
 # ══════════════════════════════════════════════════════════════════════════════
 
+def make_copy_link_button(link: str, label: str = "📋 Copy Link") -> InlineKeyboardButton:
+    """
+    Build a 1-tap Copy Button for a verification link.
+    If Telegram Bot API 7.8 CopyTextButton is supported and link length <= 256,
+    uses Telegram's native client-side clipboard copy button.
+    Otherwise, returns an inline button with callback to send the link in a tap-to-copy code block.
+    """
+    if CopyTextButton is not None and len(link) <= 256:
+        try:
+            return InlineKeyboardButton(label, copy_text=CopyTextButton(text=link))
+        except (TypeError, ValueError):
+            pass
+    return InlineKeyboardButton(label, callback_data="do:tempmail:copylink")
+
+
 def make_tempmail_keyboard(
     has_messages: bool = False,
     latest_msg_id: Optional[str] = None,
     saved_count: int = 0,
+    verify_link: Optional[str] = None,
 ) -> InlineKeyboardMarkup:
     """Build interactive buttons for Temp Mail management."""
-    keyboard = [
-        [
-            InlineKeyboardButton("🔄 Check Inbox", callback_data="do:tempmail:check"),
-            InlineKeyboardButton("🆕 New Email", callback_data="do:tempmail:new"),
-        ],
-    ]
+    keyboard = []
+
+    # If verification link is detected, show 1-tap Copy Link button at the top
+    if verify_link and verify_link.startswith(("http://", "https://")):
+        keyboard.append([
+            make_copy_link_button(verify_link, "📋 Copy Link"),
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton("🔄 Check Inbox", callback_data="do:tempmail:check"),
+        InlineKeyboardButton("🆕 New Email", callback_data="do:tempmail:new"),
+    ])
     if has_messages and latest_msg_id:
         keyboard.append([
             InlineKeyboardButton("📖 Read Latest Email", callback_data=f"do:tempmail:read:{latest_msg_id}"),
@@ -587,6 +708,30 @@ async def handle_tempmail_callback(
     active_mail = user_data.get("tempmail")
     vault_accounts = get_user_vault(user_id)
 
+    # ── ACTION: Copy Verification Link ─────────────────────────────────────
+    if action == "copylink":
+        link = context.user_data.get("tempmail_last_verify_link") if context.user_data else None
+        if not link and query.message:
+            # Fallback extraction from message text
+            target_text = query.message.text or query.message.caption or ""
+            extracted = extract_verification_links(target_text)
+            if extracted:
+                link = extracted[0]
+
+        if link:
+            await query.answer("📋 Tap below to copy link!")
+            if query.message:
+                await safe_send_text(
+                    query.message,
+                    f"🔗 <b>Verification Link (Tap to Copy):</b>\n\n"
+                    f"<code>{html.escape(link)}</code>\n\n"
+                    f"💡 <i>Tip: Tap on the link block above to copy and paste anywhere.</i>",
+                    parse_mode="HTML",
+                )
+        else:
+            await query.answer("❌ No verification link found.", show_alert=True)
+        return
+
     # ── ACTION: Show History Vault ──────────────────────────────────────────
     if action == "history":
         msg_text = format_history_msg(user_id)
@@ -630,43 +775,60 @@ async def handle_tempmail_callback(
             has_messages = bool(messages)
             latest_id = messages[0]["id"] if has_messages else None
 
-            label_str = f" (🏷️ *{acc.get('label')}*)" if acc.get("label") else ""
+            label_esc = f" (🏷️ <b>{html.escape(acc.get('label'))}</b>)" if acc.get("label") else ""
             status_text = (
-                f"✅ **Restored & Active Mailbox:**\n\n"
-                f"📧 **Email:** `{address}`{label_str}\n"
-                f"🔑 **Password:** `{password}`\n\n"
+                f"✅ <b>Restored & Active Mailbox:</b>\n\n"
+                f"📧 <b>Email:</b> <code>{html.escape(address)}</code>{label_esc}\n"
+                f"🔑 <b>Password:</b> <code>{html.escape(password)}</code>\n\n"
             )
+            top_link = None
             if messages:
                 latest = messages[0]
                 sender = latest.get("from", {}).get("address", "Unknown")
                 subject = latest.get("subject", "(No Subject)")
                 intro = latest.get("intro", "")
                 otp_code = None
+                verify_links = []
                 try:
                     detail = await fetch_message_detail_safe(new_active, latest["id"])
-                    otp_code = extract_otp(detail.get("text") or intro or "")
+                    full_body = detail.get("text") or intro or ""
+                    html_data = detail.get("html")
+                    otp_code = extract_otp(full_body)
+                    verify_links = extract_verification_links(full_body, html_data)
                 except Exception:
                     pass
 
                 status_text += (
-                    f"📩 **Latest Incoming Email:**\n"
-                    f"📌 **From:** `{sender}`\n"
-                    f"📌 **Subject:** {subject}\n"
+                    f"📩 <b>Latest Incoming Email:</b>\n"
+                    f"📌 <b>From:</b> <code>{html.escape(sender)}</code>\n"
+                    f"📌 <b>Subject:</b> {html.escape(subject)}\n"
                 )
                 if otp_code:
-                    status_text += f"\n🔑 **Detected OTP/Code:** `{otp_code}`\n"
+                    status_text += f"\n🔑 <b>Detected OTP/Code:</b> <code>{html.escape(otp_code)}</code>\n"
+                if verify_links:
+                    top_link = verify_links[0]
+                    status_text += (
+                        f"\n🔗 <b>Detected Verification Link:</b>\n"
+                        f"👉 <code>{html.escape(top_link)}</code>\n"
+                        f"💡 <i>Tip: Tap on the link or use the copy button to copy.</i>\n"
+                    )
             else:
-                status_text += "📭 Inbox is currently empty. Tap **🔄 Check Inbox** when an OTP arrives."
+                status_text += "📭 Inbox is currently empty. Tap <b>🔄 Check Inbox</b> when an OTP arrives."
+
+            if top_link and context.user_data is not None:
+                context.user_data["tempmail_last_verify_link"] = top_link
 
             if query.message:
-                await query.message.reply_text(
+                await safe_send_text(
+                    query.message,
                     status_text,
-                    parse_mode="Markdown",
                     reply_markup=make_tempmail_keyboard(
                         has_messages=has_messages,
                         latest_msg_id=latest_id,
                         saved_count=len(vault_accounts),
+                        verify_link=top_link,
                     ),
+                    parse_mode="HTML",
                 )
         except Exception as exc:
             log.exception("Failed to switch mailbox")
@@ -825,11 +987,12 @@ async def handle_tempmail_callback(
 
             if not messages:
                 if query.message:
-                    await query.message.reply_text(
-                        f"📭 **Inbox is currently empty** for:\n`{address}`\n\n"
-                        f"⏳ No emails received yet. Please wait a few moments and tap **🔄 Check Inbox** again.",
-                        parse_mode="Markdown",
+                    await safe_send_text(
+                        query.message,
+                        f"📭 <b>Inbox is currently empty</b> for:\n<code>{html.escape(address)}</code>\n\n"
+                        f"⏳ No emails received yet. Please wait a few moments and tap <b>🔄 Check Inbox</b> again.",
                         reply_markup=make_tempmail_keyboard(has_messages=False, saved_count=saved_count),
+                        parse_mode="HTML",
                     )
                 return
 
@@ -839,41 +1002,59 @@ async def handle_tempmail_callback(
             subject = latest.get("subject", "(No Subject)")
             intro = latest.get("intro", "")
 
-            # Fetch full message to parse OTP
+            # Fetch full message to parse OTP and verification links
             otp_code = None
+            verify_links = []
             try:
                 detail = await fetch_message_detail_safe(active_mail, latest_id)
                 full_body = detail.get("text") or intro or ""
+                html_data = detail.get("html")
                 otp_code = extract_otp(full_body)
+                verify_links = extract_verification_links(full_body, html_data)
             except Exception:
                 pass
 
             report = [
-                f"📩 **Incoming Email Received!** (Total: {len(messages)})",
-                f"━━━━━━━━━━━━━━━━━━━━",
-                f"📌 **From:** `{sender}`",
-                f"📌 **Subject:** {subject}",
+                f"📩 <b>Incoming Email Received!</b> (Total: {len(messages)})",
+                "━━━━━━━━━━━━━━━━━━━━",
+                f"📌 <b>From:</b> <code>{html.escape(sender)}</code>",
+                f"📌 <b>Subject:</b> {html.escape(subject)}",
             ]
             if otp_code:
-                report.append(f"\n🔑 **Detected Verification / OTP Code:** `{otp_code}`\n")
+                report.append(f"\n🔑 <b>Detected Verification / OTP Code:</b>\n👉 <code>{html.escape(otp_code)}</code>\n")
+            if verify_links:
+                first_link = verify_links[0]
+                report.append(f"\n🔗 <b>Detected Verification / Action Link:</b>\n👉 <code>{html.escape(first_link)}</code>\n")
+                if len(verify_links) > 1:
+                    report.append("📎 <i>Additional links found:</i>")
+                    for extra_l in verify_links[1:]:
+                        report.append(f"• <code>{html.escape(extra_l)}</code>")
+                    report.append("")
+                report.append("💡 <i>Tip: Tap on any link or button to copy it.</i>\n")
             if intro:
-                report.append(f"📝 **Preview:**\n{intro[:350]}")
+                report.append(f"📝 <b>Preview:</b>\n{html.escape(intro[:320])}")
             report.append("━━━━━━━━━━━━━━━━━━━━")
 
+            verify_btn_link = verify_links[0] if (verify_links and verify_links[0].startswith(("http://", "https://"))) else None
+            if verify_btn_link and context.user_data is not None:
+                context.user_data["tempmail_last_verify_link"] = verify_btn_link
+
             if query.message:
-                await query.message.reply_text(
+                await safe_send_text(
+                    query.message,
                     "\n".join(report),
-                    parse_mode="Markdown",
                     reply_markup=make_tempmail_keyboard(
                         has_messages=True,
                         latest_msg_id=latest_id,
                         saved_count=saved_count,
+                        verify_link=verify_btn_link,
                     ),
+                    parse_mode="HTML",
                 )
         except Exception as exc:
             log.exception("Tempmail inbox check failed")
             if query.message:
-                await query.message.reply_text(f"❌ Failed to check inbox: {str(exc)[:400]}")
+                await safe_send_text(query.message, f"❌ Failed to check inbox: {str(exc)[:400]}", parse_mode=None)
         return
 
     # ── ACTION: Read Full Message ───────────────────────────────────────────
@@ -884,28 +1065,53 @@ async def handle_tempmail_callback(
             subject = detail.get("subject", "(No Subject)")
             date = detail.get("createdAt", "")[:19].replace("T", " ")
             body = (detail.get("text") or "No plain text content available.").strip()
+            html_data = detail.get("html")
 
             otp_code = extract_otp(body)
+            verify_links = extract_verification_links(body, html_data)
+            primary_link = verify_links[0] if verify_links else None
+            if primary_link and context.user_data is not None:
+                context.user_data["tempmail_last_verify_link"] = primary_link
+
             header = [
-                f"📧 **Full Email Message**",
-                f"━━━━━━━━━━━━━━━━━━━━",
-                f"👤 **From:** `{sender}`",
-                f"📅 **Date:** {date}",
-                f"📋 **Subject:** {subject}",
+                "📧 <b>Full Email Message</b>",
+                "━━━━━━━━━━━━━━━━━━━━",
+                f"👤 <b>From:</b> <code>{html.escape(sender)}</code>",
+                f"📅 <b>Date:</b> {html.escape(date)}",
+                f"📋 <b>Subject:</b> {html.escape(subject)}",
             ]
             if otp_code:
-                header.append(f"🔑 **OTP Code:** `{otp_code}`")
+                header.append(f"\n🔑 <b>Detected OTP:</b> <code>{html.escape(otp_code)}</code>")
+            if verify_links:
+                header.append(f"\n🔗 <b>Detected Verification Link:</b>\n👉 <code>{html.escape(primary_link)}</code>")
+                if len(verify_links) > 1:
+                    header.append("📎 <i>Other links in message:</i>")
+                    for extra_l in verify_links[1:]:
+                        header.append(f"• <code>{html.escape(extra_l)}</code>")
+                header.append("💡 <i>Tip: Tap on the link or use the copy button to copy.</i>")
             header.append("━━━━━━━━━━━━━━━━━━━━\n")
 
-            full_text = "\n".join(header) + body
-            if len(full_text) <= 3900:
-                if query.message:
-                    await query.message.reply_text(full_text, parse_mode="Markdown")
+            header_str = "\n".join(header)
+            # Safe body truncation before escaping to avoid broken HTML tags
+            max_body_chars = max(500, 3500 - len(header_str))
+            if len(body) > max_body_chars:
+                trimmed_body = body[:max_body_chars] + "\n\n… [Truncated due to Telegram message length limit]"
             else:
-                if query.message:
-                    await query.message.reply_text(full_text[:3900] + "\n\n… [Truncated due to length]")
+                trimmed_body = body
+
+            safe_body = html.escape(trimmed_body)
+            full_text = header_str + safe_body
+
+            read_buttons = []
+            if primary_link and primary_link.startswith(("http://", "https://")):
+                read_buttons.append([make_copy_link_button(primary_link, "📋 Copy Link")])
+            read_buttons.append([InlineKeyboardButton("🔄 Back to Active Mail", callback_data="do:tempmail:show_active")])
+
+            read_markup = InlineKeyboardMarkup(read_buttons)
+            if query.message:
+                await safe_send_text(query.message, full_text, reply_markup=read_markup, parse_mode="HTML")
         except Exception as exc:
             log.exception("Read message detail failed")
             if query.message:
-                await query.message.reply_text(f"❌ Failed to read message: {str(exc)[:400]}")
+                await safe_send_text(query.message, f"❌ Failed to read message: {str(exc)[:400]}", parse_mode=None)
         return
